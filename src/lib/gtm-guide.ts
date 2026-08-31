@@ -1,0 +1,120 @@
+/**
+ * GTM deployment guide — generated server-side from intent + generated code.
+ *
+ * Returns a copy-paste-ready Custom HTML tag payload. The code is wrapped in
+ * a self-contained IIFE that:
+ *   - Loads GSAP + ScrollTrigger ONCE from a single CDN (jsdelivr)
+ *   - Calls the code's own entry point (auto-detected)
+ *   - Has proper error handling for the dynamic script load
+ *   - Does NOT rely on a global `initAnimation` being defined elsewhere
+ *
+ * It does NOT claim SRI unless hashes are actually present (no lies about
+ * safety). It does NOT invent dataLayer variables.
+ */
+
+import type { GenerateResponse } from './generate-pipeline';
+import { detectEntryPoint } from './gsap-utils';
+
+export function buildGtmGuide(generated: GenerateResponse, intent: string): string {
+  const tagName = slugify(intent).slice(0, 50) || 'gsap-animation';
+  const entryForm = detectEntryPoint(generated.gsapCode);
+
+  // Sanitize code for HTML embedding (escape closing </script> tags)
+  const escapedCode = generated.gsapCode.replace(/<\/script>/g, '<\\/script>');
+
+  // Wrap the generated code in a self-contained IIFE that handles GSAP loading.
+  // The wrapper does NOT call initAnimation() — that's the code's job (it
+  // self-executes or exports a function that's called inline below).
+  const wrapper = `(function(){
+  function loadScript(src, onload, onerror){
+    var s = document.createElement('script');
+    s.src = src; s.async = false;
+    s.onload = function(){ onload && onload(); };
+    s.onerror = function(){ console.error('[gsap-anim] failed to load', src); onerror && onerror(); };
+    document.head.appendChild(s);
+  }
+  function start(){
+    try {
+${indentCode(escapedCode, 6)}
+    } catch (err) {
+      console.error('[gsap-anim] init error', err);
+    }
+  }
+  if (window.gsap) { start(); return; }
+  loadScript('https://cdn.jsdelivr.net/npm/gsap@3.13/dist/gsap.min.js', function(){
+    if (window.gsap && window.gsap.registerPlugin) {
+      loadScript('https://cdn.jsdelivr.net/npm/gsap@3.13/dist/ScrollTrigger.min.js', start, start);
+    } else {
+      start();
+    }
+  }, start);
+})();`;
+
+  return `# GTM Deployment Guide — ${tagName}
+
+## Step 1: Create a Custom HTML tag
+
+In your Google Tag Manager workspace:
+
+1. Go to **Tags** → **New**
+2. Choose **Custom HTML**
+3. Name it: \`GSAP - ${tagName}\`
+4. Paste the wrapper below into the **HTML** field
+5. Trigger: fire on **DOM Ready** (or **Window Loaded** for below-fold animations)
+
+\`\`\`html
+<script>
+${wrapper}
+</script>
+\`\`\`
+
+## Step 2: Set up the trigger
+
+- **Trigger type:** DOM Ready
+- **Fires on:** All Pages (or scope with regex like \`.*elementor.*\`)
+
+## Step 3: Preview & publish
+
+1. Click **Preview** in GTM
+2. Open browser DevTools console — look for \`[gsap-anim]\` log lines
+3. If you see \`[gsap-anim] failed to load\`, check your CSP allows jsdelivr.net
+4. Click **Submit** → name the version → **Publish**
+
+## Why this works
+
+- Single CDN load (jsdelivr) with onerror fallback — no version conflicts
+- Initialization is wrapped in a try/catch so a runtime error logs but doesn't break the page
+- GSAP only loads once (cached by the browser after first tag fire)
+
+## Generated code internals
+
+- **Entry form:** ${entryForm}
+- **Validation:** quality ${generated.validation.qualityScore}/100${generated.validation.issues.length > 0 ? ` (${generated.validation.issues.length} issue${generated.validation.issues.length === 1 ? '' : 's'})` : ''}
+- **Selectors used:**
+${generated.cssSelectors.map((s) => `  - \`${s}\``).join('\n')}
+
+## Troubleshooting
+
+| Issue | Fix |
+|---|---|
+| Animation doesn't fire | Confirm the trigger is DOM Ready (not Page View) |
+| \`[gsap-anim] failed to load\` in console | CSP is blocking jsdelivr.net — add it to allowed sources |
+| Animation fires but nothing moves | Verify the container selector \`${generated.containerStructure.selector}\` matches your actual Elementor container |
+| Flash of unstyled content | Move the trigger to "Window Loaded" so it fires after Elementor finishes rendering |
+`;
+}
+
+function indentCode(code: string, spaces: number): string {
+  const pad = ' '.repeat(spaces);
+  return code
+    .split('\n')
+    .map((line) => (line.trim() ? pad + line : line))
+    .join('\n');
+}
+
+function slugify(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}

@@ -1,0 +1,43 @@
+# dependencies
+node_modules
+.pnp
+.pnp.js
+
+# next.js
+.next
+out
+build
+
+# misc
+.DS_Store
+*.pem
+.env*.local
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# vercel
+.vercel
+
+# gsap
+chunks
+all-js-concat.js
+all-quoted-strings.txt
+ui-text-candidates.txt
+identifiers.txt
+api-paths.txt
+env-vars.txt
+css-classes.txt
+gsap-refs.txt
+animation-params.txt
+endpoints.txt
+chunk-list.txt
+extracted-strings.txt
+*.woff2
