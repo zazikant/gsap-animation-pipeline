@@ -26,6 +26,11 @@ next-env.d.ts
 # vercel
 .vercel
 
+# dev / build logs
+*.log
+dev-server.*
+ttl-killer.*
+
 # gsap
 chunks
 all-js-concat.js
