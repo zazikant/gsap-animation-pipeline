@@ -476,7 +476,8 @@ function deriveScalabilityStrategy(intent: string): string {
 function shouldRetry(state: PipelineState): 'retry' | 'output' {
   if (state.isValid) return 'output';
   if (state.attempts >= state.maxAttempts) return 'output';
-  if (state.error) return 'output'; // bail if LLM is failing
+  // Retry on both validation failures AND LLM failures (transient timeouts,
+  // rate-limits, network issues). Only give up when we've exhausted attempts.
   return 'retry';
 }
 

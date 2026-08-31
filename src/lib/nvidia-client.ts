@@ -16,8 +16,8 @@ import { sleep } from './rate-limit';
 const NVIDIA_BASE_URL = 'https://integrate.api.nvidia.com/v1';
 export const DEFAULT_MODEL = 'openai/gpt-oss-120b';
 
-export const DEFAULT_CALL_TIMEOUT_MS = 120_000;
-export const DEFAULT_MAX_RETRIES = 1;
+export const DEFAULT_CALL_TIMEOUT_MS = 180_000;
+export const DEFAULT_MAX_RETRIES = 2;
 
 export interface NvidiaChatMessage {
   role: 'system' | 'user' | 'assistant';
