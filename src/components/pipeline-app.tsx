@@ -33,11 +33,24 @@ interface SseEvent {
 
 export function PipelineApp() {
   // ─── Persisted config (modelId + apiKey) — mirrors google-ads-subagent-vercel
-  const initial = React.useMemo(() => loadConfig(), []);
-  const [modelId, setModelId] = React.useState<ModelId>(initial.modelId);
-  const [apiKey, setApiKey] = React.useState<string>(initial.apiKey);
-  const [apiKeyDraft, setApiKeyDraft] = React.useState<string>(initial.apiKey);
-  const [keyCommitted, setKeyCommitted] = React.useState<boolean>(Boolean(initial.apiKey));
+  //
+  // CRITICAL: Always start with the server-side defaults so the initial render
+  // matches between SSR and client. Then sync from localStorage in a useEffect
+  // after mount. Reading localStorage during initial render causes a hydration
+  // mismatch (React error #418) because the server has no localStorage.
+  const [modelId, setModelId] = React.useState<ModelId>(DEFAULT_MODEL);
+  const [apiKey, setApiKey] = React.useState<string>('');
+  const [apiKeyDraft, setApiKeyDraft] = React.useState<string>('');
+  const [keyCommitted, setKeyCommitted] = React.useState<boolean>(false);
+
+  React.useEffect(() => {
+    const cfg = loadConfig();
+    setModelId(cfg.modelId);
+    setApiKey(cfg.apiKey);
+    setApiKeyDraft(cfg.apiKey);
+    setKeyCommitted(Boolean(cfg.apiKey));
+  }, []);
+
   const apiKeyInputRef = React.useRef<HTMLInputElement>(null);
 
   const [intent, setIntent] = React.useState('');
