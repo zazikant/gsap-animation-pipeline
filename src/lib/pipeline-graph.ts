@@ -182,16 +182,21 @@ function makeNodeHelpers(emit: (e: PipelineEvent) => void): NodeCtx {
 
 async function runCooldown(
   ctx: NodeCtx,
-  totalSec: number,
+  _totalSec: number,
   reason: string,
   multiplier: number,
 ): Promise<void> {
+  // decideCooldown returns delaySec=0 to mean "skip cooldown entirely"
+  // (used for fast providers like OpenCode). Treat 0 as a meaningful
+  // sentinel — DON'T fall back to totalSec on 0, only on undefined.
+  // The earlier `delaySec > 0 ? delaySec : totalSec` swallowed 0 and
+  // gave OpenCode a 30s cooldown instead of skipping.
   const decision = decideCooldown({
     attempts: 1,
     succeeded: true,
     cooldownMultiplier: multiplier,
   });
-  const sec = decision.delaySec > 0 ? decision.delaySec : totalSec;
+  const sec = typeof decision.delaySec === 'number' ? decision.delaySec : 0;
   if (sec <= 0) return;
   ctx.log(`[pipeline] cooldown ${sec}s — ${reason}`);
   await cooldownWithCountdown(sec, (remaining) => {

@@ -97,8 +97,8 @@ const TESTIMONIAL_TREE: ElementorWidget = {
         {
           className: 'swiper-pagination-bullet',
           kind: 'Icon',
-          label: 'Bullet (active gets .swiper-pagination-bullet-active)',
-          state: { active: false },
+          label: 'Bullet (first copy is active=true, rest active=false; Swiper auto-toggles .swiper-pagination-bullet-active at runtime)',
+          state: { active: true },
         },
       ],
     },
