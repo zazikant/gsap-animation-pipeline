@@ -298,6 +298,40 @@ export function validateCodeAgainstTree(
         );
       }
     }
+
+    // ─── Swiper conflict (NEW — architectural bug) ─────────────────────────
+    // The Elementor Slides widget ships a live Swiper instance that already owns:
+    //   - click handlers on .swiper-button-prev / .swiper-button-next
+    //   - click handlers on .swiper-pagination-bullet
+    //   - autoplay timer
+    //   - the active bullet class (.swiper-pagination-bullet-active)
+    //   - slide transitions (via translate3d)
+    //
+    // If the script attaches ITS OWN click listener to those elements, preventDefault()
+    // only stops anchor navigation — it does NOT stop Swiper's native listener.
+    // Both listeners fire; the script's state diverges from Swiper's activeIndex.
+    //
+    // The right architecture: get the live Swiper instance (root.swiper, or poll briefly)
+    // and hook swiper.on('slideChangeTransitionEnd', ...) for entrance animations only.
+    // Don't fight Swiper.
+    const fightsSwiper =
+      /\.swiper-button-(?:prev|next)['"][^)]*\)/.test(code) &&
+      /addEventListener\s*\(\s*['"]click/.test(code);
+
+    const fightsSwiperBullets =
+      /\.swiper-pagination-bullet['"][^)]*\)/.test(code) &&
+      /addEventListener\s*\(\s*['"]click/.test(code);
+
+    if (fightsSwiper) {
+      issues.push(
+        "Script attaches its own click listener to .swiper-button-prev/next — Swiper already has native listeners there. preventDefault() doesn't stop other listeners on the same element. Get the live Swiper instance (root.swiper) and hook swiper.on('slideChangeTransitionEnd', ...) instead.",
+      );
+    }
+    if (fightsSwiperBullets) {
+      issues.push(
+        "Script attaches its own click listener to .swiper-pagination-bullet — Swiper already has native listeners. Either let Swiper handle navigation OR call swiper.destroy() first to take over completely.",
+      );
+    }
   }
 
   // ─── Position toggle (NEW — 4/10 layout-jump bug) ─────────────────────────

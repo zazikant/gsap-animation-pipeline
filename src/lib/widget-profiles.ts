@@ -222,7 +222,8 @@ export const WIDGET_PROFILES: Record<string, WidgetProfile> = {
     widgetType: 'slides',
     width: 'w50',
     breakpoint: 'lg-2',
-    notes: 'Two-column testimonial carousel (Elementor Slides widget = Swiper). Inner classes are Swiper-stable.',
+    notes:
+      'Two-column testimonial carousel. Elementor Slides widget ships a live Swiper instance that owns navigation/clicks/autoplay/transitions. Script must hook Swiper events (root.swiper.on("slideChangeTransitionEnd")), NOT add its own click listeners to .swiper-button-* / .swiper-pagination-bullet. Inner classes are Swiper-stable.',
     selectors: [
       '.elementor-element.elementor-widget-slides',
       '.elementor-element.elementor-widget-slides .swiper',

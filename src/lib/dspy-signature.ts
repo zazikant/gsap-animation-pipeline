@@ -180,6 +180,55 @@ CAROUSEL-SPECIFIC PATTERNS (required when the tree contains bullets + prev + nex
     \`\`\`
 - The active bullet is marked by Swiper with the \`.swiper-pagination-bullet-active\` class — initialise bullet visual state from that class, not from a separate \`state.active\` flag.
 
+TESTIMONIAL-SPECIFIC ARCHITECTURE (CRITICAL — Elementor Slides widget uses Swiper):
+
+The Elementor Slides widget ships a LIVE SWIPER INSTANCE that already owns:
+  - click handlers on \`.swiper-button-prev\` and \`.swiper-button-next\`
+  - click handlers on \`.swiper-pagination-bullet\`
+  - autoplay timer
+  - the active bullet class (\`.swiper-pagination-bullet-active\`)
+  - slide transitions (via translate3d)
+
+DO NOT add your own click listeners to \`.swiper-button-prev\`, \`.swiper-button-next\`, or \`.swiper-pagination-bullet\`. \`preventDefault()\` only stops anchor navigation — it does NOT stop Swiper's native listener on the same element. Both would fire; the script's \`current\` index would diverge from Swiper's \`activeIndex\`.
+
+DO NOT run your own autoplay timer alongside Swiper's — slides could double-advance.
+
+DO NOT toggle \`position: relative/absolute\` on slides — Swiper uses translate3d for slide positioning and fights with explicit positioning.
+
+DO get the live Swiper instance and hook its events. The standard pattern:
+\`\`\`js
+var swiper = root.swiper || (function poll(){
+  var tries = 0;
+  return new Promise(function(resolve){
+    var id = setInterval(function(){
+      if (root.swiper){ clearInterval(id); resolve(root.swiper); }
+      else if (++tries > 20){ clearInterval(id); resolve(null); }
+    }, 100);
+  });
+})();
+
+swiper.then(function(s){
+  if (!s){ console.warn('[gsap-anim] Swiper not initialized'); return; }
+  s.on('slideChangeTransitionEnd', function(){
+    var slide = s.slides[s.activeIndex];
+    var content = slide.querySelector('.elementor-testimonial-content');
+    var name = slide.querySelector('.elementor-testimonial-name');
+    if (content) gsap.fromTo(content, {autoAlpha:0, y:24}, {autoAlpha:1, y:0, duration:0.6, ease:'power2.out'});
+    if (name) gsap.fromTo(name, {autoAlpha:0, y:16}, {autoAlpha:1, y:0, duration:0.5, ease:'power2.out'});
+  });
+  // Initial entrance: animate content on the FIRST slide too
+  var firstSlide = s.slides[0];
+  if (firstSlide){
+    var c = firstSlide.querySelector('.elementor-testimonial-content');
+    if (c) gsap.fromTo(c, {autoAlpha:0, y:24}, {autoAlpha:1, y:0, duration:0.6, ease:'power2.out', delay:0.2});
+  }
+});
+\`\`\`
+
+The GSAP script's role: animate content INSIDE each slide on slide change. Do NOT manage slides, bullets, autoplay, or transitions.
+
+If for some reason the script must drive the carousel itself (e.g., Swiper is provably absent), then \`swiper.destroy()\` BEFORE adding listeners, OR document explicitly that this profile does NOT use Elementor's Slides widget.
+
 TREE JSON REQUIREMENTS:
 - The tree root uses ONE of \`id\` or \`className\` (not both). For testimonials, the root is the user's id \`testimonial-swiper\`. For other widgets, the root is often the auto-class from Elementor.
 - Use the widget profile's \`treeTemplate\` as the structural skeleton — same parent/child shape, same kinds, same field names.
