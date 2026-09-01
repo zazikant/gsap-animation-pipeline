@@ -9,14 +9,14 @@
  *   entryNode
  *     ↓
  *   generateNode          ← single LLM call (Nvidia 120B / OpenCode GLM 5.1)
+ *     ↓                    using AX/DSPy-style signature in dspy-signature.ts
+ *   parseGsapNode         ← strip fences, normalize IIFE; extract tree JSON
  *     ↓
- *   parseGsapNode         ← strip fences, normalize, locate entry point
- *     ↓
- *   validateNode          ← regex + structural sandbox check
+ *   validateNode          ← code rules + tree-shape assertions
  *     ↓                  ↘ retry?  ↓
  *   [conditional edge] ───→ retryGuardNode → generateNode (with feedback)
  *     ↓                  ↗
- *   outputNode            ← terminal; emits GenerateResponse
+ *   outputNode            ← terminal; emits GenerateResponse (code + tree)
  *
  * Each node emits SSE events (stage-start / log / stage-end) so the UI shows
  * live progress. Between LLM nodes we insert the adaptive cooldown from
@@ -33,6 +33,15 @@ import {
 } from './widget-profiles';
 import { stripCodeFences, normalizeGsapCode, validateGsapCode } from './gsap-utils';
 import type { GenerateResponse, ElementorContainer } from './generate-pipeline';
+import type { ElementorWidgetValidated } from './elementor-widget';
+import {
+  buildUserPrompt,
+  parsePrediction,
+  extractCodeAndTree,
+  AnimationSignatureError,
+  ANIMATION_SYSTEM_PROMPT,
+  type AnimationPrediction,
+} from './dspy-signature';
 
 // ─── State shape ─────────────────────────────────────────────────────────────
 
@@ -45,8 +54,12 @@ export interface PipelineState {
   widgetProfile: WidgetProfile | null;
   /** Raw code from the LLM (un-normalized) */
   rawCode: string;
+  /** Raw tree JSON string from the LLM (un-validated) */
+  rawTreeJson: string;
   /** Normalized code (stripped fences, IIFE wrappers unwrapped) */
   gsapCode: string;
+  /** Validated tree (Zod-parsed + shape-asserted) */
+  containerTree: ElementorWidgetValidated | null;
   /** Issues found by validateNode, fed back to retryGuardNode */
   validationIssues: string[];
   /** Validation pass/fail */
@@ -59,7 +72,7 @@ export interface PipelineState {
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
   /** Append-only log lines for the UI */
   stageTrace: string[];
-  /** Final container metadata (filled by entryNode) */
+  /** Final container metadata (filled by entryNode + outputNode) */
   container: ElementorContainer | null;
   /** Final result (filled by outputNode) */
   result: GenerateResponse | null;
@@ -101,9 +114,17 @@ const PipelineAnnotation = Annotation.Root({
     reducer: (_x, y) => y,
     default: () => '',
   }),
+  rawTreeJson: Annotation<string>({
+    reducer: (_x, y) => y,
+    default: () => '',
+  }),
   gsapCode: Annotation<string>({
     reducer: (_x, y) => y,
     default: () => '',
+  }),
+  containerTree: Annotation<ElementorWidgetValidated | null>({
+    reducer: (_x, y) => y,
+    default: () => null,
   }),
   validationIssues: Annotation<string[]>({
     reducer: (_x, y) => y,
@@ -142,24 +163,6 @@ const PipelineAnnotation = Annotation.Root({
     default: () => null,
   }),
 });
-
-// ─── System prompt (shared) ──────────────────────────────────────────────────
-
-const SYSTEM_PROMPT = `You are an expert GSAP animator writing code for Elementor-built WordPress sites.
-
-OUTPUT FORMAT — strictly follow:
-1. Output ONLY executable JavaScript. No prose, no markdown code fences (\`\`\`), no explanations.
-2. Wrap your code in: (function init(){ <your code here> })();
-   OR define a top-level \`function initAnimation(){ ... }\` and call it at the bottom.
-3. Load GSAP + ScrollTrigger dynamically if not already on the page:
-     if (!window.gsap) { loadScript("https://cdn.jsdelivr.net/npm/gsap@3.13/dist/gsap.min.js", next); }
-     else next();
-   Use ONE CDN (jsdelivr). Don't load from multiple sources.
-4. Handle the dynamic script load with an onerror callback that logs to console.
-5. The selectors must match the widget profile provided in the user message EXACTLY.
-6. Use \`gsap.context(() => { ... })\` so animations can be reverted via the context's \`.revert()\` API.
-7. Handle window resize with ScrollTrigger.refresh() or kill+rebuild triggers.
-8. Match the user's described behavior — if they ask for a CAROUSEL, implement slide navigation (prev/next, autoplay, transition between slides), NOT just a one-time reveal.`;
 
 // ─── Node helpers ────────────────────────────────────────────────────────────
 
@@ -225,6 +228,9 @@ async function entryNode(
   };
   ctx.log(`[entry] widget=${profile.widgetType} width=${profile.width} @ ${profile.breakpoint}`);
   ctx.log(`[entry] selectors: ${profile.selectors.length} prepared`);
+  ctx.log(
+    `[entry] tree template: root=${profile.treeTemplate.id} ${(profile.repeats ?? []).length} repeat group(s)`,
+  );
   ctx.emit({ type: 'stage-end', ts: Date.now(), stage: 'entry', ok: true });
   return { widgetProfile: profile, container, stageTrace: [`entry → widget=${profile.widgetType}`] };
 }
@@ -239,7 +245,7 @@ async function generateNode(
     type: 'stage-start',
     ts: Date.now(),
     stage: 'generate',
-    name: 'Code Generation',
+    name: 'Code + Tree Generation',
     description: `Calling LLM (attempt ${state.attempts + 1}/${state.maxAttempts})`,
   });
 
@@ -249,9 +255,13 @@ async function generateNode(
     `[generate] attempt ${state.attempts + 1}/${state.maxAttempts}${isRetry ? ' (retry with feedback)' : ''}`,
   );
 
-  const userPrompt = isRetry
-    ? buildRetryPrompt(state.intent, profile, state.rawCode, state.validationIssues)
-    : buildInitialPrompt(state.intent, profile);
+  const userPrompt = buildUserPrompt({
+    intent: state.intent,
+    widgetProfile: profile,
+    previousCode: isRetry ? state.rawCode : undefined,
+    previousTreeJson: isRetry ? state.rawTreeJson : undefined,
+    validationIssues: isRetry ? state.validationIssues : undefined,
+  });
 
   // Always bump the attempt counter — even on error — so shouldRetry can terminate.
   const nextAttempt = state.attempts + 1;
@@ -259,7 +269,7 @@ async function generateNode(
   let code = '';
   try {
     code = await callUnifiedLLM(
-      SYSTEM_PROMPT,
+      ANIMATION_SYSTEM_PROMPT,
       userPrompt,
       state.modelId,
       state.apiKey,
@@ -273,7 +283,7 @@ async function generateNode(
     ctx.log(`[generate] LLM call failed: ${msg.slice(0, 200)}`);
     ctx.emit({ type: 'stage-end', ts: Date.now(), stage: 'generate', ok: false, error: msg });
     // Increment attempts even on error so shouldRetry terminates after maxAttempts.
-    return { error: msg, attempts: nextAttempt, rawCode: state.rawCode };
+    return { error: msg, attempts: nextAttempt, rawCode: state.rawCode, rawTreeJson: state.rawTreeJson };
   }
 
   ctx.log(`[generate] received ${code.length} chars`);
@@ -281,6 +291,7 @@ async function generateNode(
 
   return {
     rawCode: code,
+    rawTreeJson: code, // mirror; parseGsapNode re-extracts both pieces
     attempts: nextAttempt,
     messages: [
       { role: 'user', content: userPrompt },
@@ -288,48 +299,6 @@ async function generateNode(
     ],
     stageTrace: [`generate → ${code.length} chars (attempt ${nextAttempt})`],
   };
-}
-
-function buildInitialPrompt(intent: string, profile: WidgetProfile): string {
-  return `Intent: ${intent}
-
-Target widget: ${profile.widgetType}
-Container selector: ${profile.selectors[0]}
-Inner selectors available:
-${profile.selectors.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}
-
-Requirements:
-- Animation must match the described behavior (carousel = slide nav + autoplay, not just reveal)
-- Use the container selector exactly as given
-- Wrap your code in: (function init() { /* code */ })();   OR   function initAnimation() { /* code */ } initAnimation();
-- Load GSAP from https://cdn.jsdelivr.net/npm/gsap@3.13/dist/gsap.min.js if not present
-- Load ScrollTrigger from the same CDN if you use it
-- Handle window resize: ScrollTrigger.refresh()
-- Use gsap.context() for cleanup
-
-Output ONLY JavaScript. No markdown fences. No prose.`;
-}
-
-function buildRetryPrompt(
-  intent: string,
-  profile: WidgetProfile,
-  previousCode: string,
-  issues: string[],
-): string {
-  return `Intent: ${intent}
-
-Target widget: ${profile.widgetType}
-Container selector: ${profile.selectors[0]}
-
-PREVIOUS ATTEMPT:
-\`\`\`
-${previousCode}
-\`\`\`
-
-ISSUES TO FIX:
-${issues.map((i) => `• ${i}`).join('\n')}
-
-Rewrite the code addressing ALL listed issues. Output ONLY the corrected JavaScript — no markdown fences, no prose.`;
 }
 
 // ─── Node 3: parseGsapNode ───────────────────────────────────────────────────
@@ -342,21 +311,47 @@ async function parseGsapNode(
     type: 'stage-start',
     ts: Date.now(),
     stage: 'parse',
-    name: 'GSAP Parser',
-    description: 'Stripping fences + normalizing IIFE wrappers',
+    name: 'GSAP + Tree Parser',
+    description: 'Stripping fences + normalizing IIFE + extracting tree JSON',
   });
-  const stripped = stripCodeFences(state.rawCode);
+
+  // Adapter from dspy-signature.ts handles the code-fence + JSON-fence extraction.
+  const extracted = extractCodeAndTree(state.rawCode);
+  const stripped = extracted.code ? stripCodeFences(extracted.code) : '';
   const normalized = normalizeGsapCode(stripped);
-  ctx.log(`[parse] stripped fences (${state.rawCode.length} → ${stripped.length})`);
-  ctx.log(`[parse] normalized (${stripped.length} → ${normalized.length})`);
+  ctx.log(`[parse] raw response: ${state.rawCode.length} chars`);
+  ctx.log(`[parse] extracted code: ${extracted.code?.length ?? 0} chars, tree JSON: ${extracted.treeJsonText?.length ?? 0} chars`);
+  ctx.log(`[parse] normalized code: ${normalized.length} chars`);
+
+  // Best-effort tree parse here. Hard assertions run in validateNode so the
+  // retry node can read the issues list.
+  let containerTree: ElementorWidgetValidated | null = null;
+  if (extracted.treeJsonText) {
+    try {
+      const parsed = JSON.parse(extracted.treeJsonText);
+      const candidate =
+        parsed && typeof parsed === 'object' && 'containerTree' in parsed
+          ? (parsed as { containerTree: unknown }).containerTree
+          : parsed;
+      // Lazy import to avoid a circular dependency in tests.
+      const { validateTree } = await import('./elementor-schema');
+      const v = validateTree(candidate);
+      if (v.ok) containerTree = v.tree;
+    } catch {
+      // Swallow — validateNode will produce a clear issue.
+    }
+  }
+
   ctx.emit({ type: 'stage-end', ts: Date.now(), stage: 'parse', ok: true });
   return {
     gsapCode: normalized,
-    stageTrace: [`parse → ${normalized.length} chars normalized`],
+    containerTree,
+    rawTreeJson: extracted.treeJsonText ?? '',
+    stageTrace: [`parse → ${normalized.length} chars, tree=${containerTree ? 'ok' : 'pending'}`],
   };
 }
 
-// ─── Node 4: validateNode (sandbox check) ────────────────────────────────────
+// ─── Node 4: validateNode (sandbox check) ────────────────────────────────────────────────────
 
 async function validateNode(
   state: PipelineState,
@@ -367,21 +362,50 @@ async function validateNode(
     ts: Date.now(),
     stage: 'validate',
     name: 'Sandbox Validation',
-    description: 'Checking for selectors, primitives, onerror, multi-CDN, etc.',
+    description: 'Code rules + tree-shape assertions',
   });
   const result = validateGsapCode(state.gsapCode, state.widgetProfile);
-  ctx.log(
-    `[validate] quality=${result.qualityScore}${result.isValid ? ' ✓ pass' : ` ✗ ${result.issues.length} issue(s)`}`,
-  );
-  if (result.issues.length > 0) {
-    result.issues.forEach((issue) => ctx.log(`[validate]   - ${issue}`));
+
+  // AX/DSPy-style assertion pass: re-run the structured prediction parser to
+  // catch any shape issues the parseGsapNode's best-effort pass missed.
+  const signatureIssues: string[] = [];
+  if (!state.containerTree) {
+    signatureIssues.push('Tree JSON is missing or failed Zod validation');
   }
-  ctx.emit({ type: 'stage-end', ts: Date.now(), stage: 'validate', ok: result.isValid });
+  try {
+    // Re-parse the raw response to surface every parse-level issue at once.
+    parsePrediction(state.rawCode, state.widgetProfile!, {
+      strictTree: false,
+      strictCode: false,
+    });
+  } catch (err) {
+    if (err instanceof AnimationSignatureError) {
+      signatureIssues.push(...err.issues);
+    } else if (err instanceof Error) {
+      signatureIssues.push(err.message);
+    }
+  }
+
+  const allIssues = [...result.issues, ...signatureIssues];
+  const deduction = Math.min(100, allIssues.length * 12);
+  const qualityScore = Math.max(0, 100 - deduction);
+  const isValid = qualityScore >= 80 && signatureIssues.length === 0;
+
+  ctx.log(`[validate] code quality=${result.qualityScore}, signature issues=${signatureIssues.length}`);
+  if (allIssues.length > 0) {
+    allIssues.forEach((issue) => ctx.log(`[validate]   - ${issue}`));
+  }
+  ctx.emit({
+    type: 'stage-end',
+    ts: Date.now(),
+    stage: 'validate',
+    ok: isValid,
+  });
   return {
-    isValid: result.isValid,
-    validationIssues: result.issues,
+    isValid,
+    validationIssues: allIssues,
     stageTrace: [
-      `validate → ${result.isValid ? 'pass' : 'fail'} (score=${result.qualityScore})`,
+      `validate → ${isValid ? 'pass' : 'fail'} (score=${qualityScore}, sig=${signatureIssues.length})`,
     ],
   };
 }
@@ -426,33 +450,39 @@ async function outputNode(
     ts: Date.now(),
     stage: 'output',
     name: 'Output',
-    description: 'Packaging validated code into GenerateResponse',
+    description: 'Packaging validated code + tree into GenerateResponse',
   });
 
   // If we've exhausted retries with a still-failing code, force a "best effort" result
   const finalValidation = validateGsapCode(state.gsapCode, state.widgetProfile);
-  const container = state.container ?? state.widgetProfile!.selectors[0]
-    ? {
+  const container: ElementorContainer = state.container
+    ? { ...state.container }
+    : {
         selector: state.widgetProfile!.selectors[0],
         width: state.widgetProfile!.width,
         breakpoint: state.widgetProfile!.breakpoint,
         notes: state.widgetProfile!.notes,
-      }
-    : { selector: '.elementor-element', width: 'w100', breakpoint: 'lg-1', notes: '' };
+      };
+
+  if (state.containerTree) {
+    container.tree = state.containerTree;
+  }
 
   const config = getModelConfig(state.modelId);
   const result: GenerateResponse = {
     gsapCode: state.gsapCode,
     containerStructure: container,
     cssSelectors: state.widgetProfile!.selectors,
-    scalabilityStrategy: deriveScalabilityStrategy(state.intent),
+    scalabilityStrategy: deriveScalabilityStrategy(state.intent, state.containerTree),
     validation: finalValidation,
     attempts: state.attempts,
     model: `${config.id} (${config.model})`,
     pipeline: state.stageTrace,
   };
 
-  ctx.log(`[output] packaged ${state.gsapCode.length} chars, ${state.attempts} attempt(s)`);
+  ctx.log(
+    `[output] packaged ${state.gsapCode.length} chars, ${state.attempts} attempt(s), tree=${state.containerTree ? 'present' : 'missing'}`,
+  );
   ctx.emit({
     type: 'stage-end',
     ts: Date.now(),
@@ -462,8 +492,21 @@ async function outputNode(
   return { result, stageTrace: ['output → finalized'] };
 }
 
-function deriveScalabilityStrategy(intent: string): string {
+function deriveScalabilityStrategy(intent: string, tree: ElementorWidgetValidated | null): string {
   const lc = intent.toLowerCase();
+  // Tree-aware hints first.
+  if (tree) {
+    const counts: Record<string, number> = {};
+    const walk = (n: ElementorWidgetValidated): void => {
+      counts[n.kind] = (counts[n.kind] ?? 0) + 1;
+      n.children?.forEach(walk);
+    };
+    walk(tree);
+    const slideCount = counts['Container'] ?? 0;
+    if (slideCount >= 2) {
+      return `Carousel: stagger entrance with stagger: 0.1 across ${slideCount} containers; gsap.context() for cleanup; revertible matchMedia if needed.`;
+    }
+  }
   if (lc.includes('scroll')) return 'ScrollTrigger with batched stagger; data-scroll attribute for performance.';
   if (lc.includes('hover')) return 'gsap.quickTo() for hover; cache timeline references.';
   if (lc.includes('count') || lc.includes('counter') || lc.includes('number')) return 'gsap.to with onUpdate driving textContent; transform+opacity only.';
@@ -522,7 +565,9 @@ export async function runGenerationPipelineStream(opts: RunOptions): Promise<Gen
     apiKey: opts.apiKey,
     widgetProfile: null,
     rawCode: '',
+    rawTreeJson: '',
     gsapCode: '',
+    containerTree: null,
     validationIssues: [],
     isValid: false,
     attempts: 0,
@@ -558,3 +603,8 @@ export async function runGenerationPipelineStream(opts: RunOptions): Promise<Gen
     throw err;
   }
 }
+
+// Re-export the adapter functions so unit tests and downstream tools can
+// import them without reaching into the dspy-signature module directly.
+export { extractCodeAndTree, parsePrediction } from './dspy-signature';
+export type { AnimationPrediction } from './dspy-signature';

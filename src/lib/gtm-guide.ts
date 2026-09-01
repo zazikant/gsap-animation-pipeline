@@ -10,10 +10,15 @@
  *
  * It does NOT claim SRI unless hashes are actually present (no lies about
  * safety). It does NOT invent dataLayer variables.
+ *
+ * When a container tree is present in the generated response, the guide
+ * includes a per-container troubleshooting table that maps each tree node
+ * to the CSS selector + layout hint the animation should target.
  */
 
 import type { GenerateResponse } from './generate-pipeline';
 import { detectEntryPoint } from './gsap-utils';
+import type { ElementorWidgetValidated } from './elementor-widget';
 
 export function buildGtmGuide(generated: GenerateResponse, intent: string): string {
   const tagName = slugify(intent).slice(0, 50) || 'gsap-animation';
@@ -49,6 +54,10 @@ ${indentCode(escapedCode, 6)}
     }
   }, start);
 })();`;
+
+  const treeSection = generated.containerStructure.tree
+    ? renderTreeSection(generated.containerStructure.tree, generated.containerStructure.selector)
+    : '';
 
   return `# GTM Deployment Guide — ${tagName}
 
@@ -92,7 +101,7 @@ ${wrapper}
 - **Validation:** quality ${generated.validation.qualityScore}/100${generated.validation.issues.length > 0 ? ` (${generated.validation.issues.length} issue${generated.validation.issues.length === 1 ? '' : 's'})` : ''}
 - **Selectors used:**
 ${generated.cssSelectors.map((s) => `  - \`${s}\``).join('\n')}
-
+${treeSection}
 ## Troubleshooting
 
 | Issue | Fix |
@@ -102,6 +111,30 @@ ${generated.cssSelectors.map((s) => `  - \`${s}\``).join('\n')}
 | Animation fires but nothing moves | Verify the container selector \`${generated.containerStructure.selector}\` matches your actual Elementor container |
 | Flash of unstyled content | Move the trigger to "Window Loaded" so it fires after Elementor finishes rendering |
 `;
+}
+
+function renderTreeSection(tree: ElementorWidgetValidated, rootSelector: string): string {
+  const lines: string[] = ['', '## Elementor container tree', ''];
+  lines.push('The animation targets the following recursive widget hierarchy. Each row is one node in the tree.');
+  lines.push('');
+  lines.push('| #id | Kind | Layout | Props |');
+  lines.push('|---|---|---|---|');
+  const walk = (n: ElementorWidgetValidated, parentSelector: string): string => {
+    const sel = `${parentSelector} #${n.id}`;
+    const props = n.props
+      ? Object.entries(n.props).map(([k, v]) => `${k}="${v}"`).join('<br>')
+      : '';
+    lines.push(`| \`${sel}\` | ${n.kind} | ${n.layout ?? '—'} | ${props || '—'} |`);
+    const childParent = parentSelector;
+    n.children?.forEach((c: ElementorWidgetValidated) => walk(c, childParent));
+    return sel;
+  };
+  walk(tree, rootSelector);
+  lines.push('');
+  lines.push(
+    '> If a widget fails to animate, verify its rendered DOM contains the exact selector shown above. Elementor sometimes strips inner classes on container conversion.',
+  );
+  return lines.join('\n');
 }
 
 function indentCode(code: string, spaces: number): string {
