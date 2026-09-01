@@ -46,8 +46,9 @@ export async function unifiedChatCompletion(
       messages: opts.messages as NvidiaChatMessage[],
       apiKey: opts.apiKey,
       temperature: opts.temperature,
-      maxTokens: opts.maxTokens,
+      maxTokens: opts.maxTokens ?? config.defaultMaxTokens,
       timeoutMs: config.timeoutMs,
+      reasoningEffort: config.reasoningEffort,
       onLog: opts.onLog,
       onChunk: opts.onChunk,
     };

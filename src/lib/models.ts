@@ -37,13 +37,15 @@ export const MODELS: Record<ModelId, ModelConfig> = {
     id: 'nvidia-gpt-oss-120b',
     name: 'NVIDIA GPT-OSS-120B',
     description:
-      'OpenAI GPT-OSS-120B served via NVIDIA NIM. Slow (40-50s TTFB) but high quality — needs the long per-call timeout and full inter-stage cooldowns.',
+      'OpenAI GPT-OSS-120B served via NVIDIA NIM. Reasoning model — needs max_tokens>=8192 because the reasoning_content stream alone can burn 2-4k tokens before content begins. Slow (40-50s TTFB) but high quality.',
     baseUrl: 'https://integrate.api.nvidia.com/v1/chat/completions',
     model: 'openai/gpt-oss-120b',
     apiKeyPrefix: 'nvapi-',
     docsUrl: 'https://build.nvidia.com/openai/gpt-oss-120b',
     timeoutMs: 120_000,
-    defaultMaxTokens: 2048,
+    // Reasoning models: 2048 leaves zero room after reasoning. 8192 covers
+    // ~6k reasoning + ~2k content, which fits our prompt + structured output.
+    defaultMaxTokens: 8192,
     reasoningEffort: 'low',
     cooldownMultiplier: 1,
     retryBackoffMultiplier: 1,

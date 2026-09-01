@@ -32,6 +32,8 @@ export interface NvidiaCallOptions {
   apiKey: string;
   timeoutMs?: number;
   maxRetries?: number;
+  /** Reasoning effort for reasoning models (e.g. gpt-oss-120b). 'low'/'medium'/'high'. */
+  reasoningEffort?: 'low' | 'medium' | 'high';
   onLog?: (line: string) => void;
   onChunk?: (text: string) => void;
 }
@@ -137,8 +139,9 @@ export async function nvidiaChatCompletion(
         {
           model,
           messages: opts.messages,
-          max_tokens: opts.maxTokens ?? 2048,
+          max_tokens: opts.maxTokens ?? 8192,
           temperature: opts.temperature ?? 0.7,
+          ...(opts.reasoningEffort ? { reasoning_effort: opts.reasoningEffort } : {}),
         },
         opts.apiKey,
         controller.signal,
