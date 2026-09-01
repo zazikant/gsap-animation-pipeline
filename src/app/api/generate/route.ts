@@ -2,7 +2,10 @@ import { NextRequest } from 'next/server';
 import { runGenerationPipelineStream, type PipelineEvent } from '@/lib/generate-pipeline';
 import { MODELS, type ModelId } from '@/lib/models';
 
-export const maxDuration = 60;
+// Worst-case wall time on NVIDIA path: 3 LLM calls × (45s TTFB + 30s cooldown)
+// = ~225s. OpenCode path: ~15s. 300s gives NVIDIA retries full headroom on
+// Vercel's Pro plan (maxDuration limit is 300 for Hobby, 800 for Pro).
+export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
 
 function sse(event: PipelineEvent): string {

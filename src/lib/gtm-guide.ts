@@ -30,12 +30,16 @@ export function buildGtmGuide(generated: GenerateResponse, intent: string): stri
   // Wrap the generated code in a self-contained IIFE that handles GSAP loading.
   // The wrapper does NOT call initAnimation() — that's the code's job (it
   // self-executes or exports a function that's called inline below).
+  //
+  // CRITICAL: onerror callbacks must NOT be the same function as onload. If
+  // GSAP or ScrollTrigger fails to load, we log + bail — we never call the
+  // success path, which would throw on `gsap.context(...)` with gsap undefined.
   const wrapper = `(function(){
   function loadScript(src, onload, onerror){
     var s = document.createElement('script');
     s.src = src; s.async = false;
     s.onload = function(){ onload && onload(); };
-    s.onerror = function(){ console.error('[gsap-anim] failed to load', src); onerror && onerror(); };
+    s.onerror = function(){ console.error('[gsap-anim] failed to load', src); (typeof onerror === 'function') && onerror(); };
     document.head.appendChild(s);
   }
   function start(){
@@ -48,11 +52,11 @@ ${indentCode(escapedCode, 6)}
   if (window.gsap) { start(); return; }
   loadScript('https://cdn.jsdelivr.net/npm/gsap@3.13/dist/gsap.min.js', function(){
     if (window.gsap && window.gsap.registerPlugin) {
-      loadScript('https://cdn.jsdelivr.net/npm/gsap@3.13/dist/ScrollTrigger.min.js', start, start);
+      loadScript('https://cdn.jsdelivr.net/npm/gsap@3.13/dist/ScrollTrigger.min.js', start, function(){ console.error('[gsap-anim] ST failed; running without'); start(); });
     } else {
       start();
     }
-  }, start);
+  }, function(){ console.error('[gsap-anim] GSAP failed'); });
 })();`;
 
   const treeSection = generated.containerStructure.tree
