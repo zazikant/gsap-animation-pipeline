@@ -130,7 +130,8 @@ export function PreviewPane({ generated, intent, onLooksGood, onReset }: Preview
           <CardHeader>
             <CardTitle className="text-sm">Elementor Container Tree</CardTitle>
             <p className="mt-0.5 text-xs text-zinc-500">
-              Recursive widget hierarchy the animation targets. Generated alongside the code.
+              Recursive widget hierarchy the animation targets. <code className="rounded bg-zinc-100 px-1">#id</code> marks one-off elements;
+              <code className="rounded bg-zinc-100 px-1">.className</code> marks repeating siblings.
             </p>
           </CardHeader>
           <CardContent>
@@ -214,10 +215,16 @@ function WidgetTreeNode({
     if (hasChildren) setOpen((v) => !v);
   };
 
+  // Selector chip: prefer id (one-off), else className (repeating), else mark as unrepeatable.
+  // Repeating nodes get a "× N" badge showing the inferred count from the tree
+  // (count = 1 by default since the tree stores the template once).
+  const selectorKind = node.id ? 'id' : node.className ? 'class' : 'none';
+  const selectorText = node.id ? `#${node.id}` : node.className ? `.${node.className}` : '(no selector)';
+
   return (
     <li>
       <div
-        className="flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-zinc-50"
+        className="flex flex-wrap items-center gap-1.5 rounded px-1 py-0.5 hover:bg-zinc-50"
         style={{ paddingLeft: depth * 12 }}
       >
         {hasChildren ? (
@@ -233,10 +240,20 @@ function WidgetTreeNode({
           <span className="inline-block h-4 w-4" />
         )}
         <Icon className="h-3.5 w-3.5 text-zinc-500" />
-        <span className="font-mono text-zinc-900">#{node.id}</span>
+        <span
+          className={`font-mono ${selectorKind === 'id' ? 'text-zinc-900' : selectorKind === 'class' ? 'text-blue-700' : 'text-red-600'}`}
+          title={selectorKind === 'id' ? 'One-off element (id)' : selectorKind === 'class' ? 'Repeating siblings share this class' : 'Unreachable from code — add id or className'}
+        >
+          {selectorText}
+        </span>
         <span className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-zinc-600">
           {node.kind}
         </span>
+        {selectorKind === 'class' && (
+          <span className="rounded border border-blue-200 bg-blue-50 px-1 py-0 font-mono text-[10px] text-blue-700">
+            repeating
+          </span>
+        )}
         {node.label && <span className="text-zinc-600">— {node.label}</span>}
         {node.layout && (
           <span className="rounded border border-zinc-200 px-1 py-0 font-mono text-[10px] text-zinc-500">
@@ -264,7 +281,11 @@ function WidgetTreeNode({
       {hasChildren && open && (
         <ul className="mt-1 space-y-1">
           {node.children!.map((child: ElementorWidgetValidated) => (
-            <WidgetTreeNode key={child.id} node={child} depth={depth + 1} />
+            <WidgetTreeNode
+              key={child.id ?? child.className ?? Math.random().toString()}
+              node={child}
+              depth={depth + 1}
+            />
           ))}
         </ul>
       )}

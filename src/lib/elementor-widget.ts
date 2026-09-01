@@ -18,31 +18,44 @@ export type WidgetKind =
   | 'Divider';
 
 /**
- * Recursive Elementor widget node.
+ * Selector strategy:
+ *   - `id`        — kebab-case CSS id, used for ONE-OFF elements only
+ *                    (root container, single-instance wrappers). Must be set
+ *                    by the user in Elementor's Advanced tab; Elementor does
+ *                    not auto-generate unique ids for widgets.
+ *   - `className` — kebab-case CSS class. Used for REPEATING or shared
+ *                    elements (slides, dots, cards, columns). These are
+ *                    either:
+ *                      (a) baked in by Elementor/Swiper
+ *                          (e.g. `.swiper-slide`, `.swiper-pagination-bullet`,
+ *                          `.elementor-icon-box`), or
+ *                      (b) set by the user in Elementor's Advanced tab.
+ *                    The LLM-generated code queries these by class selector.
  *
- * Used by:
- *   - `widget-profiles.ts` to ship a canonical `treeTemplate` per widget
- *   - `pipeline-graph.ts` to receive the LLM-generated `containerTree`
- *   - `preview-pane.tsx` to render the tree recursively
- *   - `gtm-guide.ts` to produce tree-aware troubleshooting notes
+ * Repeating siblings share a single `className`; the code uses
+ * querySelectorAll to get all of them, then addresses by index. The tree
+ * describes ONE structural template — not N enumerated instances.
  *
- * Field semantics:
- *   - `id`: kebab-case CSS-suffix (e.g. "slide-bg-1"). Combined with the
- *     widget profile's container selector at render time to form the full
- *     Elementor selector. Must be unique within the tree.
- *   - `kind`: what kind of widget this is (Container, Image, …).
- *   - `label`: human-readable label shown in the Preview tree (not used by
- *     selectors).
- *   - `props`: free-form per-kind props (e.g. Image.src, Text.text,
- *     Button.label, Heading.text).
- *   - `layout`: human-readable layout hint ("flex row", "absolute",
- *     "gradient overlay"). UI only; doesn't affect selectors.
- *   - `state`: dynamic runtime flags (e.g. `{ active: false }` for a dot
- *     indicator). UI only.
- *   - `children`: only set on Container nodes.
+ * Validation rules (in elementor-schema.ts):
+ *   - Each node must have AT LEAST ONE of `id` or `className`. (A node with
+ *     neither is unreachable from code.)
+ *   - If both are set, prefer `id` for one-off roots and `className` for
+ *     everything else. The validator accepts both — it just warns when an
+ *     `id` looks like it might have been auto-generated (e.g. ends in
+ *     `-N` for some integer N) because that suggests the LLM enumerated
+ *     instances when it should have used a class.
  */
 export interface ElementorWidget {
-  id: string;
+  /** Optional. One-off element id. Kebab-case when present. */
+  id?: string;
+  /** CSS class selector. Kebab-case when present. */
+  className?: string;
+  /**
+   * 1-based ordinal within repeating siblings. `0` means "template" — the
+   * tree describes the structure, the actual instances live on the page
+   * and the code reaches them by class.
+   */
+  index?: number;
   kind: WidgetKind;
   label?: string;
   props?: Record<string, string>;
@@ -57,7 +70,9 @@ export interface ElementorWidget {
  * validated and is safe to render in the UI".
  */
 export interface ElementorWidgetValidated {
-  id: string;
+  id?: string;
+  className?: string;
+  index?: number;
   kind: WidgetKind;
   label?: string;
   props?: Record<string, string>;

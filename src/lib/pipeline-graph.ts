@@ -31,7 +31,7 @@ import {
   selectWidgetProfile,
   type WidgetProfile,
 } from './widget-profiles';
-import { stripCodeFences, normalizeGsapCode, validateGsapCode } from './gsap-utils';
+import { stripCodeFences, normalizeGsapCode, validateGsapCode, validateCodeAgainstTree } from './gsap-utils';
 import type { GenerateResponse, ElementorContainer } from './generate-pipeline';
 import type { ElementorWidgetValidated } from './elementor-widget';
 import {
@@ -362,7 +362,7 @@ async function validateNode(
     ts: Date.now(),
     stage: 'validate',
     name: 'Sandbox Validation',
-    description: 'Code rules + tree-shape assertions',
+    description: 'Code rules + tree-shape + cross-validation',
   });
   const result = validateGsapCode(state.gsapCode, state.widgetProfile);
 
@@ -386,12 +386,18 @@ async function validateNode(
     }
   }
 
-  const allIssues = [...result.issues, ...signatureIssues];
+  // Code ↔ tree cross-validation: catches structural mismatches neither side
+  // would flag alone (e.g. createElement for a tree-present kind).
+  const cross = validateCodeAgainstTree(state.gsapCode, state.containerTree, state.widgetProfile);
+
+  const allIssues = [...result.issues, ...signatureIssues, ...cross.issues];
   const deduction = Math.min(100, allIssues.length * 12);
   const qualityScore = Math.max(0, 100 - deduction);
-  const isValid = qualityScore >= 80 && signatureIssues.length === 0;
+  const isValid = qualityScore >= 80 && signatureIssues.length === 0 && cross.isValid;
 
-  ctx.log(`[validate] code quality=${result.qualityScore}, signature issues=${signatureIssues.length}`);
+  ctx.log(
+    `[validate] code=${result.qualityScore} sig=${signatureIssues.length} cross=${cross.issues.length}`,
+  );
   if (allIssues.length > 0) {
     allIssues.forEach((issue) => ctx.log(`[validate]   - ${issue}`));
   }
@@ -405,7 +411,7 @@ async function validateNode(
     isValid,
     validationIssues: allIssues,
     stageTrace: [
-      `validate → ${isValid ? 'pass' : 'fail'} (score=${qualityScore}, sig=${signatureIssues.length})`,
+      `validate → ${isValid ? 'pass' : 'fail'} (score=${qualityScore}, sig=${signatureIssues.length}, cross=${cross.issues.length})`,
     ],
   };
 }

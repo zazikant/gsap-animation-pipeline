@@ -115,24 +115,51 @@ ${treeSection}
 
 function renderTreeSection(tree: ElementorWidgetValidated, rootSelector: string): string {
   const lines: string[] = ['', '## Elementor container tree', ''];
-  lines.push('The animation targets the following recursive widget hierarchy. Each row is one node in the tree.');
+  lines.push(
+    'The animation targets the following recursive widget hierarchy. Repeating siblings share a single class selector (e.g. `.swiper-slide`); one-off elements use an id.',
+  );
   lines.push('');
-  lines.push('| #id | Kind | Layout | Props |');
+  lines.push('| Selector | Kind | Layout | Props |');
   lines.push('|---|---|---|---|');
   const walk = (n: ElementorWidgetValidated, parentSelector: string): string => {
-    const sel = `${parentSelector} #${n.id}`;
+    const own = n.id ? `#${n.id}` : n.className ? `.${n.className}` : '(none)';
+    const sel = parentSelector === rootSelector && n.id
+      ? `#${n.id}` // root uses its own id, not the parent selector
+      : n.className
+        ? `${parentSelector} .${n.className}`
+        : n.id
+          ? `${parentSelector} #${n.id}`
+          : parentSelector;
     const props = n.props
       ? Object.entries(n.props).map(([k, v]) => `${k}="${v}"`).join('<br>')
       : '';
-    lines.push(`| \`${sel}\` | ${n.kind} | ${n.layout ?? '—'} | ${props || '—'} |`);
-    const childParent = parentSelector;
+    lines.push(`| \`${sel}\` (${own}) | ${n.kind} | ${n.layout ?? '—'} | ${props || '—'} |`);
+    const childParent = sel;
     n.children?.forEach((c: ElementorWidgetValidated) => walk(c, childParent));
     return sel;
   };
-  walk(tree, rootSelector);
+  // For the root, use just its own id (no parent prefix).
+  const rootSel = tree.id
+    ? `#${tree.id}`
+    : tree.className
+      ? `.${tree.className}`
+      : rootSelector;
+  lines.pop(); // remove the first row produced by walk(tree, rootSelector)
+  // Render manually starting from the root so the selector prefix is just the root.
+  const renderFromRoot = (n: ElementorWidgetValidated, parentSel: string): string => {
+    const own = n.id ? `#${n.id}` : n.className ? `.${n.className}` : '(none)';
+    const sel = own === '(none)' ? parentSel : own === `#${n.id}` || own === `.${n.className}` ? own : `${parentSel} ${own}`;
+    const props = n.props
+      ? Object.entries(n.props).map(([k, v]) => `${k}="${v}"`).join('<br>')
+      : '';
+    lines.push(`| \`${sel}\` (${own}) | ${n.kind} | ${n.layout ?? '—'} | ${props || '—'} |`);
+    n.children?.forEach((c) => renderFromRoot(c, sel));
+    return sel;
+  };
+  renderFromRoot(tree, rootSel);
   lines.push('');
   lines.push(
-    '> If a widget fails to animate, verify its rendered DOM contains the exact selector shown above. Elementor sometimes strips inner classes on container conversion.',
+    '> If a widget fails to animate, verify its rendered DOM contains the exact class/id shown above. For repeating siblings, query the class with `querySelectorAll` and address by index. Elementor sometimes strips inner classes on container conversion — set them in the Advanced tab if missing.',
   );
   return lines.join('\n');
 }

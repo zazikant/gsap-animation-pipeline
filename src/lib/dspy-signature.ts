@@ -74,7 +74,7 @@ export class AnimationSignatureError extends Error {
   }
 }
 
-// ─── Compiled system prompt (refined over 5 iterations) ──────────────────────
+// ─── Compiled system prompt (refined over 5 recovery + 2 structural passes) ─
 
 export const ANIMATION_SYSTEM_PROMPT = `You are an expert GSAP animator writing code for Elementor-built WordPress sites.
 
@@ -87,7 +87,7 @@ OUTPUT CONTRACT (this is a structured-output task — adhere strictly):
    \`\`\`
 
    \`\`\`json
-   {"containerTree": { "id": "...", "kind": "Container", "label": "...", "children": [ ... ] }}
+   {"containerTree": { "id|className": "...", "kind": "Container", "label": "...", "children": [ ... ] }}
    \`\`\`
 
    Or — if the model supports it — a single JSON envelope:
@@ -97,31 +97,111 @@ OUTPUT CONTRACT (this is a structured-output task — adhere strictly):
 
    Either shape is accepted. Do not output prose outside the fences.
 
+SELECTOR STRATEGY (CRITICAL — this was the root cause of the 4/10 rating):
+
+The tree describes Elementor DOM. Use ONE source of truth per node:
+  - REPEATING children (slides, dots, cards, pricing columns, stat cells) → \`className\` field in the tree. The tree stores the class ONCE. The code queries \`querySelectorAll('.foo')\` and addresses siblings by index.
+  - ONE-OFF elements (root container, progress label, anything that exists exactly once on the page) → \`id\` field. The user must set this in Elementor's Advanced tab.
+  - Never BOTH on the same node (pick one).
+  - NEVER use auto-generated id suffixes like \`-1\`, \`-2\`, \`-3\` on repeating children — that's an anti-pattern. Repeating siblings share ONE className; the tree describes the structural template.
+
+Examples of CORRECT selector strategy:
+  ✓ \`{ "className": "swiper-slide", "kind": "Container" }\`          ← repeating slide
+  ✓ \`{ "id": "testimonial-swiper", "kind": "Container" }\`           ← one-off root
+  ✗ \`{ "id": "testimonial-slide-1", "kind": "Container" }\`           ← auto-id (anti-pattern)
+  ✗ \`{ "id": "testimonial-slide-1", "className": "swiper-slide" }\`   ← both (anti-pattern)
+
+For testimonial carousels, the Swiper library auto-generates stable inner classes — use THEM, not hand-set ids:
+  - \`.swiper\`                 (wrapper)
+  - \`.swiper-slide\`           (each slide — repeating, share this className)
+  - \`.swiper-pagination\`      (bullets wrapper)
+  - \`.swiper-pagination-bullet\` (each dot — repeating, share this className; the active one gets \`.swiper-pagination-bullet-active\` added by Swiper)
+  - \`.swiper-button-prev\`     (prev button)
+  - \`.swiper-button-next\`     (next button)
+
+TREE-DRIVEN CODE WRITING (CRITICAL — read carefully):
+The \`containerTree\` describes Elementor DOM that ALREADY EXISTS. Elementor has rendered every widget in the tree. Your code must NOT \`document.createElement\` ANY element whose kind appears in the tree. Specifically:
+- DO NOT create slide containers — they already exist as \`.swiper-slide\`.
+- DO NOT create pagination dots — they already exist as \`.swiper-pagination-bullet\`.
+- DO NOT create prev/next buttons — they already exist as \`.swiper-button-prev\` / \`.swiper-button-next\`.
+- DO create helper nodes ONLY if they are PURELY transient AND you add cleanup via \`ctx.add(() => helper.remove())\`. Examples: a \`.progress\` <div> for the auto-play progress bar — OK because the tree doesn't define it.
+- Pattern: \`const slides = root.querySelectorAll('.swiper-slide');\` then \`slides[0]\`, \`slides[1]\`, … Wire handlers to them.
+- Pattern: scope everything with \`gsap.context(() => { ... }, rootEl)\` where \`rootEl\` is the root container. The \`scope\` argument is what makes \`.revert()\` clean up selectors + listeners + tweens.
+
 CODE REQUIREMENTS:
 - Wrap your code in: (function initAnimation(){ <your code here> })();
 - Load GSAP + ScrollTrigger dynamically from https://cdn.jsdelivr.net/npm/gsap@3.13/dist/ if not already on the page. ONE CDN (jsdelivr). No multi-CDN.
-- Handle the dynamic script load with an onerror callback that logs to console.
-- Use \`gsap.context(() => { ... })\` so animations can be reverted via the context's \`.revert()\` API.
-- Handle window resize with ScrollTrigger.refresh() or kill+rebuild triggers.
+- Handle the dynamic script load with an onerror callback that does NOT call the success path on failure. The pattern:
+    \`\`\`js
+    function loadScript(src, onload, onerror){
+      var s = document.createElement('script');
+      s.src = src; s.async = false;
+      s.onload = function(){ onload && onload(); };
+      s.onerror = function(){ console.error('[gsap-anim] failed to load', src); (typeof onerror === 'function') && onerror(); };
+      document.head.appendChild(s);
+    }
+    function start(){ try { /* code */ } catch (err) { console.error('[gsap-anim] init error', err); } }
+    if (window.gsap) { start(); return; }
+    loadScript(GSAP_URL, function(){
+      if (window.gsap && window.gsap.registerPlugin) {
+        loadScript(ST_URL, start, function(){ console.error('[gsap-anim] ST failed; running without'); start(); });
+      } else { start(); }
+    }, function(){ console.error('[gsap-anim] GSAP failed'); });
+    \`\`\`
+- Use \`gsap.context(() => { ... }, scopeEl)\` so animations can be reverted via the context's \`.revert()\` API.
+- Handle window resize with ScrollTrigger.refresh() ONLY when ScrollTrigger has actually been registered. The required pattern:
+    \`\`\`js
+    window.addEventListener('resize', function(){
+      if (typeof ScrollTrigger !== 'undefined') ScrollTrigger.refresh();
+    });
+    \`\`\`
+  Do NOT call \`ScrollTrigger.refresh()\` unconditionally — if the page has GSAP but not ScrollTrigger, the resize handler will throw on every resize.
 - The selectors you target must match the widget profile's selectors EXACTLY (provided in the user message).
 - Match the user's described behavior — if they ask for a CAROUSEL, implement slide navigation (prev/next, autoplay, transition between slides), NOT just a one-time reveal.
 
+CAROUSEL-SPECIFIC PATTERNS (required when the tree contains bullets + prev + next + slides):
+- \`isAnimating\` flag: every \`goTo(n)\` call must early-return if \`isAnimating\` is true. Set \`isAnimating = true\` at the start of \`goTo\`, clear it in the \`onComplete\` of the last tween. Prevents stacked timelines from spam-click.
+    \`\`\`js
+    var isAnimating = false;
+    function goTo(n){
+      if (isAnimating || n === current) return;
+      isAnimating = true;
+      // ... build the timeline ...
+      tl.eventCallback('onComplete', function(){ isAnimating = false; });
+    }
+    \`\`\`
+- Auto-play: prefer \`gsap.delayedCall(interval, advance).pause()\` / \`.resume()\` over \`setInterval\` — it's clean to kill via \`ctx.add(() => delayedCall.kill())\`.
+- Slide positioning (CRITICAL — fixes the layout-jump bug): every slide (NOT just the first) must have its \`position: absolute; top: 0; left: 0; width: 100%;\` set identically at init. Then transition via opacity (or autoAlpha) + transform. Never toggle position between relative and absolute. The wrapper gets \`position: relative\` and a fixed height (tallest slide's height).
+    \`\`\`js
+    var maxH = 0;
+    slides.forEach(function(s){ s.style.position = 'absolute'; s.style.top = '0'; s.style.left = '0'; s.style.width = '100%'; var h = s.offsetHeight; if (h > maxH) maxH = h; });
+    wrapper.style.position = 'relative';
+    wrapper.style.height = (maxH + 10) + 'px';
+    \`\`\`
+- The active bullet is marked by Swiper with the \`.swiper-pagination-bullet-active\` class — initialise bullet visual state from that class, not from a separate \`state.active\` flag.
+
 TREE JSON REQUIREMENTS:
-- The tree root MUST be a Container whose \`id\` matches the widget profile's primary selector (e.g. \`testimonial-swiper\`, \`hero-section\`, \`cards-grid\`).
-- Use the widget profile's \`treeTemplate\` as the structural skeleton — same parent/child shape, same leaf kinds, same field names.
-- For repeating containers (slides, cards, pricing columns, dots), emit one entry per repeat with a numeric suffix on the id: \`testimonial-slide-1\`, \`testimonial-slide-2\`, etc. Use \`inferRepeatCount\` (intent) for how many; falls back to the profile's default.
+- The tree root uses ONE of \`id\` or \`className\` (not both). For testimonials, the root is the user's id \`testimonial-swiper\`. For other widgets, the root is often the auto-class from Elementor.
+- Use the widget profile's \`treeTemplate\` as the structural skeleton — same parent/child shape, same kinds, same field names.
+- Repeating children share a single \`className\` (no enumeration). One-off children use \`id\`. The tree describes ONE structural template, NOT N enumerated instances.
 - Every leaf node MUST have a \`props\` object with placeholder values. Image nodes need \`props.src\`. Text/Heading need \`props.text\`. Button needs \`props.label\` (and \`props.href\` when relevant).
-- All ids MUST be unique within the tree. Use kebab-case (lowercase letters, digits, hyphens) only.
-- Layout hints (in \`layout\` field) when obvious: "flex row", "flex column", "absolute scrim", "relative". Optional but encouraged.
-- State flags (in \`state\` field) when obvious: carousel dots need \`{ "active": false }\` (one of them gets \`{ "active": true }\`), a progress label needs \`{ "current": 1, "total": 4 }\`.
+- All ids (when present) MUST be unique within the tree. All classNames (when present) MUST be kebab-case (lowercase letters, digits, hyphens).
+- Layout hints (in \`layout\` field) when obvious: "flex row", "flex column", "absolute overlay", "relative". For grid widths, include the \`wNN\` width + breakpoint like \`"flex column, w50, side-by-side at lg-2"\`. Optional but encouraged — the code uses these hints to size/position children.
+- State flags (in \`state\` field) when obvious: the active bullet (the one with \`.swiper-pagination-bullet-active\`) gets \`{ "active": true }\`, the others get \`{ "active": false }\`. A progress label gets \`{ "current": 1, "total": 4 }\`.
 
 ANTI-PATTERNS (these will fail validation):
 - Loading GSAP from multiple CDNs in the same code block.
-- Missing onerror handler on a dynamic <script> injection.
+- Missing onerror handler on a dynamic <script> injection. AND onerror callback must NOT be the same as the success callback.
+- \`document.createElement\` for any element kind that already appears in the tree (Button, Container, Image, Heading, Text, Icon, Divider).
+- Unconditional \`ScrollTrigger.refresh()\` outside a typeof-guard.
+- Carousel \`goTo\` that doesn't guard against re-entry while a transition is in flight.
+- Toggling position: relative/absolute on slides — set them all to absolute at init and leave them there.
 - Tree nodes whose \`kind\` is "Container" but have zero children.
 - Tree nodes whose \`kind\` is "Image"/"Heading"/"Text"/"Button"/"Icon"/"Divider" but have children.
 - Tree ids that aren't kebab-case.
 - Tree ids that duplicate another id in the same tree.
+- Tree ids that end in \`-N\` (where N is a digit) — that's an auto-generated id anti-pattern; use a className instead.
+- Nodes with neither id nor className (unreachable from code).
 - Selectors in the code that don't match the widget profile.`;
 
 // ─── User-prompt builder ─────────────────────────────────────────────────────
@@ -131,8 +211,8 @@ export function buildUserPrompt(input: AnimationSignatureInput): string {
   const repeatSection = (widgetProfile.repeats ?? [])
     .map((r) => {
       const count = inferRepeatCountFromIntent(intent, r.defaultCount);
-      return `Repeat ${r.childIdPrefix} × ${count} inside ${r.parentId}. Each instance has structure:
-${JSON.stringify(r.child, null, 2)}`;
+      const parentRef = r.parentIsId ? `#${r.parentKey}` : `.${r.parentKey}`;
+      return `Repeating siblings: ${count} × \`.${r.childClassName}\` (${r.label}) inside ${parentRef}. The tree stores this template ONCE — the code queries \`querySelectorAll('.${r.childClassName}')\` and addresses siblings by index. Do NOT enumerate instances in the tree.`;
     })
     .join('\n\n');
 
