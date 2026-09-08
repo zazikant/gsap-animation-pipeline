@@ -30,27 +30,17 @@ function sse(event: PipelineEvent): string {
 }
 
 export async function POST(request: NextRequest) {
-  // ─── Auth: prefer server-side NVIDIA_API_KEY (ax-translator pattern).
-  // If absent, fall back to Bearer header from the client UI. This lets
-  // the user paste their own key for testing while still allowing the
-  // deployed site to ship with a server-side key.
-  const serverKey = process.env.NVIDIA_API_KEY;
+  // ─── Auth: prefer server-side API keys (ax-translator pattern), fall
+  // back to Bearer header from the client UI. This lets the user paste
+  // their own key for testing while still allowing the deployed site to
+  // ship with server-side keys for both providers.
   const authHeader = request.headers.get('Authorization') ?? '';
   const bearerKey = authHeader.startsWith('Bearer ')
     ? authHeader.slice('Bearer '.length).trim()
     : '';
-  const apiKey = serverKey || bearerKey;
-  if (!apiKey) {
-    return new Response(
-      JSON.stringify({
-        error:
-          'Missing API key. Either set NVIDIA_API_KEY in your Vercel env vars, or paste a key in the UI ConfigBar.',
-      }),
-      { status: 401, headers: { 'Content-Type': 'application/json' } },
-    );
-  }
 
   // ─── Body: intent + optional modelId + presetId.
+  // We need the modelId FIRST so we know which server-side env var to check.
   let body: { intent?: string; presetId?: string; modelId?: ModelId };
   try {
     body = await request.json();
@@ -72,6 +62,27 @@ export async function POST(request: NextRequest) {
   // Default to NVIDIA — matches the original gsap-animation-pipeline.
   const resolvedModelId: ModelId =
     modelId && modelId in MODELS ? modelId : 'nvidia-gpt-oss-20b';
+
+  // Pick the server-side env var based on the resolved provider. NVIDIA
+  // uses NVIDIA_API_KEY; OpenCode uses OPENCODE_API_KEY. If neither is
+  // set, we fall back to the client-provided Bearer key (UI ConfigBar).
+  const serverKey =
+    resolvedModelId === 'opencode-glm-5.1'
+      ? process.env.OPENCODE_API_KEY
+      : process.env.NVIDIA_API_KEY;
+  const apiKey = serverKey || bearerKey;
+  if (!apiKey) {
+    const envVarName =
+      resolvedModelId === 'opencode-glm-5.1'
+        ? 'OPENCODE_API_KEY'
+        : 'NVIDIA_API_KEY';
+    return new Response(
+      JSON.stringify({
+        error: `Missing API key. Either set ${envVarName} in your Vercel env vars, or paste a key in the UI ConfigBar.`,
+      }),
+      { status: 401, headers: { 'Content-Type': 'application/json' } },
+    );
+  }
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({

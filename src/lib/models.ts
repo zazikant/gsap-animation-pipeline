@@ -71,7 +71,7 @@ export const MODELS: Record<ModelId, ModelConfig> = {
     id: 'opencode-glm-5.1',
     name: 'OpenCode Zen — GLM 5.1',
     description:
-      'GLM 5.1 via opencode.ai/zen/go. The gateway now serves GLM 5.3 behind the glm-5.1 alias — thinking-only, so we use reasoning_effort "low". Fast and reliable. The OpenCode Go gateway REQUIRES a stable `x-opencode-session` header per conversation (we mint one UUID per run and reuse it across retries for prompt-cache affinity) plus a custom `User-Agent`.',
+      'GLM 5.1 via opencode.ai/zen/go. The gateway now serves GLM 5.3 behind the glm-5.1 alias — thinking-only, so we use reasoning_effort "low". Fast and reliable (typical 5-15s). The OpenCode Go gateway REQUIRES a stable `x-opencode-session` header per conversation (we mint one UUID per run and reuse it across retries for prompt-cache affinity) plus a custom `User-Agent`. The same ax-translator-inspired prompt simplification that made NVIDIA gpt-oss-20b reliable also applies here — the trimmed ANIMATION_SYSTEM_PROMPT (~1.4KB) is shared by both routes via the unified LLM dispatcher.',
     baseUrl: 'https://opencode.ai/zen/go/v1/chat/completions',
     model: 'glm-5.1',
     apiKeyPrefix: 'sk-',
