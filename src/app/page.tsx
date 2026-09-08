@@ -4,7 +4,7 @@ import { PipelineApp } from '@/components/pipeline-app';
 export const metadata: Metadata = {
   title: 'GSAP Animation Pipeline - Elementor + GTM',
   description:
-    'AI-powered GSAP animation generator for Elementor-built WordPress sites, deployed via Google Tag Manager. Powered by Nvidia GPT-OSS-20B with LangGraph validation loop and resilience layer.',
+    'AI-powered GSAP animation generator for Elementor-built WordPress sites, deployed via Google Tag Manager. Powered by Nvidia GPT-OSS-20B with a zero-shot generation pipeline.',
   openGraph: {
     title: 'GSAP Animation Pipeline',
     description: 'AI-powered GSAP animation generator for Elementor + GTM',

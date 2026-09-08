@@ -51,6 +51,13 @@ export interface GenerateResponse {
   attempts: number;
   model: string;
   pipeline: string[];
+  /**
+   * Set when the pipeline produced a degraded/placeholder result because the
+   * LLM call failed (timeout, network error, rate-limit). The UI surfaces this
+   * on the preview pane so the user understands the empty code is a symptom,
+   * not a real (low-quality) generation.
+   */
+  error?: string;
 }
 
 export const GenerateRequestSchema = z.object({
@@ -66,16 +73,18 @@ export type { PipelineEvent } from './pipeline-graph';
 // Re-export the Elementor widget type for component code that wants the shape.
 export type { ElementorWidget, ElementorWidgetValidated } from './elementor-widget';
 
-const STAGE_ORDER = ['entry', 'generate', 'parse', 'validate', 'retry', 'output'] as const;
+// Zero-shot pipeline — only the stages the graph actually traverses.
+// validate/retry nodes still exist in pipeline-graph.ts (kept registered
+// for type compatibility) but are never reached, so we don't show them
+// in the UI's progress tracker.
+const STAGE_ORDER = ['entry', 'generate', 'parse', 'output'] as const;
 type StageId = (typeof STAGE_ORDER)[number];
 
 const STAGE_META: Record<StageId, { name: string; description: string }> = {
   entry: { name: 'Entry Node', description: 'Parsing intent & container map' },
-  generate: { name: 'Generate', description: 'Calling LLM with intent' },
+  generate: { name: 'Generate', description: 'Calling LLM with intent (zero-shot)' },
   parse: { name: 'Parse', description: 'Normalizing GSAP output + tree JSON' },
-  validate: { name: 'Validate', description: 'Sandbox check on generated code + tree' },
-  retry: { name: 'Retry Guard', description: 'Applying feedback to retry' },
-  output: { name: 'Output', description: 'Packaging validated code + tree' },
+  output: { name: 'Output', description: 'Packaging code + tree for preview' },
 };
 
 export { STAGE_ORDER, STAGE_META };

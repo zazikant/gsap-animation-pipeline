@@ -260,7 +260,7 @@ export function PipelineApp() {
           <div>
             <h1 className="text-xl font-bold tracking-tight text-zinc-900">GSAP Animation Pipeline</h1>
             <p className="mt-0.5 text-xs text-zinc-500">
-              Intent-in, Code-out • {config.id === 'nvidia-gpt-oss-20b' ? 'Nvidia 20B' : 'GLM 5.1'} + LangGraph
+              Intent-in, Code-out • {config.id === 'nvidia-gpt-oss-20b' ? 'Nvidia 20B' : 'GLM 5.1'} (zero-shot)
             </p>
           </div>
         </div>

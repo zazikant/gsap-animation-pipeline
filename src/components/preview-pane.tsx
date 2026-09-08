@@ -14,6 +14,7 @@ import {
   Minus as DividerIcon,
   CheckCircle2,
   RotateCcw,
+  AlertTriangle,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -57,9 +58,6 @@ export function PreviewPane({ generated, intent, onLooksGood, onReset }: Preview
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Badge variant={generated.validation.isValid ? 'default' : 'destructive'}>
-            Quality: {generated.validation.qualityScore}
-          </Badge>
           <Badge variant="outline">Attempts: {generated.attempts}</Badge>
           {generated.containerStructure.tree && (
             <Badge variant="outline" className="border-emerald-300 text-emerald-700">
@@ -68,6 +66,26 @@ export function PreviewPane({ generated, intent, onLooksGood, onReset }: Preview
           )}
         </div>
       </header>
+
+      {generated.error && (
+        <div
+          role="alert"
+          className="flex items-start gap-3 rounded-lg border border-red-300 bg-red-50 p-4"
+        >
+          <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-600" />
+          <div className="space-y-1">
+            <p className="text-sm font-semibold text-red-900">
+              The LLM call failed — the code below is a placeholder, not a real generation.
+            </p>
+            <p className="text-xs text-red-800">{generated.error}</p>
+            <p className="pt-1 text-xs text-red-700">
+              Try one of: (1) a shorter/simpler intent, (2) switch to{' '}
+              <span className="font-semibold">OpenCode GLM 5.1</span> in the model dropdown
+              (much faster), or (3) run locally with <code className="rounded bg-red-100 px-1">npm run dev</code> (no 60s Vercel cap).
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card>
@@ -161,21 +179,6 @@ export function PreviewPane({ generated, intent, onLooksGood, onReset }: Preview
           </pre>
         </CardContent>
       </Card>
-
-      {generated.validation.issues.length > 0 && (
-        <Card className="border-amber-200 bg-amber-50">
-          <CardHeader>
-            <CardTitle className="text-sm text-amber-900">Validation Issues</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ul className="list-disc space-y-1 pl-5 text-xs text-amber-800">
-              {generated.validation.issues.map((issue, i) => (
-                <li key={i}>{issue}</li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
-      )}
 
       <footer className="flex flex-wrap items-center justify-end gap-3">
         <Button variant="ghost" onClick={onReset}>

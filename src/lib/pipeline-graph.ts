@@ -482,8 +482,12 @@ async function outputNode(
     description: 'Packaging validated code + tree into GenerateResponse',
   });
 
-  // If we've exhausted retries with a still-failing code, force a "best effort" result
-  const finalValidation = validateGsapCode(state.gsapCode, state.widgetProfile);
+  // Zero-shot mode: we no longer run validateNode, so don't compute a
+  // quality score here either. The validation object is still attached
+  // to satisfy the GenerateResponse schema (and the preview pane's
+  // existing layout), but isValid=false and qualityScore=0 are
+  // intentionally neutral — they don't represent a judgment of the
+  // model's output, just "we didn't grade it."
   const container: ElementorContainer = state.container
     ? { ...state.container }
     : {
@@ -498,19 +502,31 @@ async function outputNode(
   }
 
   const config = getModelConfig(state.modelId);
+  // Detect LLM-failure-induced placeholder: when the LLM call errored,
+  // parseNode produces a tiny normalized wrapper (~46 chars) with no
+  // `gsap.` calls. In that case, attach the LLM error to the result so
+  // the UI's preview pane can show the user that the empty code is a
+  // symptom of the LLM failure, not a real generation.
+  const isLlmFailurePlaceholder =
+    !!state.error && (!state.gsapCode || !state.gsapCode.includes('gsap.'));
   const result: GenerateResponse = {
     gsapCode: state.gsapCode,
     containerStructure: container,
     cssSelectors: state.widgetProfile!.selectors,
     scalabilityStrategy: deriveScalabilityStrategy(state.intent, state.containerTree),
-    validation: finalValidation,
+    validation: {
+      isValid: false,
+      qualityScore: 0,
+      issues: [],
+    },
     attempts: state.attempts,
     model: `${config.id} (${config.model})`,
     pipeline: state.stageTrace,
+    ...(isLlmFailurePlaceholder && state.error ? { error: state.error } : {}),
   };
 
   ctx.log(
-    `[output] packaged ${state.gsapCode.length} chars, ${state.attempts} attempt(s), tree=${state.containerTree ? 'present' : 'missing'}`,
+    `[output] packaged ${state.gsapCode.length} chars, ${state.attempts} attempt(s), tree=${state.containerTree ? 'present' : 'missing'}${isLlmFailurePlaceholder ? ' [LLM failure placeholder — error attached]' : ''}`,
   );
   ctx.emit({
     type: 'stage-end',
@@ -556,22 +572,20 @@ function shouldRetry(state: PipelineState): 'retry' | 'output' {
 // ─── Build the graph ──────────────────────────────────────────────────────────
 
 function buildGraph() {
+  // Zero-shot pipeline: GPT produces whatever it produces, we ship it.
+  // No quality gate, no retry. The validate/retry NODES are intentionally
+  // NOT registered (LangGraph throws if a registered node has no incoming
+  // edges), but the validateNode/retryGuardNode FUNCTIONS are kept
+  // below for type-compatibility with anything that imports them.
   const workflow = new StateGraph(PipelineAnnotation)
     .addNode('entry', (s: PipelineState) => entryNode(s, makeNodeHelpers(_globalEmit)))
     .addNode('generate', (s: PipelineState) => generateNode(s, makeNodeHelpers(_globalEmit)))
     .addNode('parse', (s: PipelineState) => parseGsapNode(s, makeNodeHelpers(_globalEmit)))
-    .addNode('validate', (s: PipelineState) => validateNode(s, makeNodeHelpers(_globalEmit)))
-    .addNode('retry', (s: PipelineState) => retryGuardNode(s, makeNodeHelpers(_globalEmit)))
     .addNode('output', (s: PipelineState) => outputNode(s, makeNodeHelpers(_globalEmit)));
 
   workflow.addEdge('entry', 'generate');
   workflow.addEdge('generate', 'parse');
-  workflow.addEdge('parse', 'validate');
-  workflow.addConditionalEdges('validate', shouldRetry, {
-    retry: 'retry',
-    output: 'output',
-  });
-  workflow.addEdge('retry', 'generate');
+  workflow.addEdge('parse', 'output');
   workflow.addEdge('output', END);
   workflow.setEntryPoint('entry');
 
@@ -641,7 +655,15 @@ export async function runGenerationPipelineStream(opts: RunOptions): Promise<Gen
       model: `${opts.modelId}`,
       pipeline: final.stageTrace,
     };
-    if (final.error && !result.gsapCode) {
+    if (final.error) {
+      // ALWAYS emit the error event when the LLM call failed — even if a
+      // placeholder gsapCode was packaged by outputNode. Without this, the
+      // UI transitions to the preview pane showing the empty code as if
+      // it were a real (low-quality) generation, and the user can't tell
+      // that the underlying cause was a 50s LLM timeout on Vercel Hobby.
+      // The error message is actionable (see nvidia-client.ts): it tells
+      // the user to try a simpler intent, switch to GLM 5.1, or run
+      // locally.
       opts.emit({ type: 'error', ts: Date.now(), message: final.error });
     }
     // Emit pipeline-end so the frontend transitions to Preview pane
