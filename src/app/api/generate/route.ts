@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
 
   // Default to NVIDIA — matches the original gsap-animation-pipeline.
   const resolvedModelId: ModelId =
-    modelId && modelId in MODELS ? modelId : 'nvidia-gpt-oss-120b';
+    modelId && modelId in MODELS ? modelId : 'nvidia-gpt-oss-20b';
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({

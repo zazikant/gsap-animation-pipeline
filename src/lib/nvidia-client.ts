@@ -2,19 +2,19 @@
  * NVIDIA Chat Completions client — streaming edition with controlled calls.
  *
  * Pattern lifted from `ax-translator/src/lib/nvidia-client.ts`. Each call:
- *   - Streams the response (chunk-by-chunk) from gpt-oss-120b
+ *   - Streams the response (chunk-by-chunk) from gpt-oss-20b
  *   - Has a hard per-call timeout (DEFAULT_CALL_TIMEOUT_MS)
  *   - Retries once with backoff on transient failures
  *   - Emits structured log lines via onLog so the UI can show progress
  *
  * Base URL: https://integrate.api.nvidia.com/v1
- * Default model: openai/gpt-oss-120b
+ * Default model: openai/gpt-oss-20b
  */
 
 import { sleep } from './rate-limit';
 
 const NVIDIA_BASE_URL = 'https://integrate.api.nvidia.com/v1';
-export const DEFAULT_MODEL = 'openai/gpt-oss-120b';
+export const DEFAULT_MODEL = 'openai/gpt-oss-20b';
 
 export const DEFAULT_CALL_TIMEOUT_MS = 180_000;
 export const DEFAULT_MAX_RETRIES = 2;
@@ -32,7 +32,7 @@ export interface NvidiaCallOptions {
   apiKey: string;
   timeoutMs?: number;
   maxRetries?: number;
-  /** Reasoning effort for reasoning models (e.g. gpt-oss-120b). 'low'/'medium'/'high'. */
+  /** Reasoning effort for reasoning models (e.g. gpt-oss-20b). 'low'/'medium'/'high'. */
   reasoningEffort?: 'low' | 'medium' | 'high';
   onLog?: (line: string) => void;
   onChunk?: (text: string) => void;

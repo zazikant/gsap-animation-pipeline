@@ -1,7 +1,7 @@
 /**
  * Rate-limit handling with per-model cooldown multipliers.
  *
- * Adaptive cooldown rules (NVIDIA gpt-oss-120b is slow + flaky on free tier):
+ * Adaptive cooldown rules (NVIDIA gpt-oss-20b can be slow + flaky on free tier):
  *   - Succeeded on first attempt:  10s  (× cooldownMultiplier)
  *   - Succeeded after retries:     30s  (× cooldownMultiplier)
  *   - Failed all attempts:         60s  (× cooldownMultiplier)

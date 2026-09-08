@@ -8,7 +8,7 @@
  *
  *   entryNode
  *     ↓
- *   generateNode          ← single LLM call (Nvidia 120B / OpenCode GLM 5.1)
+ *   generateNode          ← single LLM call (Nvidia 20B / OpenCode GLM 5.1)
  *     ↓                    using AX/DSPy-style signature in dspy-signature.ts
  *   parseGsapNode         ← strip fences, normalize IIFE; extract tree JSON
  *     ↓

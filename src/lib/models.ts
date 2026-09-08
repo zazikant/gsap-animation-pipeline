@@ -2,12 +2,12 @@
  * Provider configs — mirrors `google-ads-subagent-vercel/lib/models.ts`.
  *
  * Both providers expose an OpenAI-compatible /v1/chat/completions endpoint.
- * The default model is NVIDIA NIM gpt-oss-120b (matches the original
- * gsap-animation-pipeline). OpenCode Zen with GLM 5.1 is the fast/cheap
- * alternative.
+ * The default model is NVIDIA NIM gpt-oss-20b (the 120b variant was sunset,
+ * so the pipeline was migrated to the smaller, faster 20b model). OpenCode
+ * Zen with GLM 5.1 is the alternative fast/cheap provider.
  */
 
-export type ModelId = 'nvidia-gpt-oss-120b' | 'opencode-glm-5.1';
+export type ModelId = 'nvidia-gpt-oss-20b' | 'opencode-glm-5.1';
 
 export interface ModelConfig {
   readonly id: ModelId;
@@ -33,15 +33,15 @@ export interface ModelConfig {
 }
 
 export const MODELS: Record<ModelId, ModelConfig> = {
-  'nvidia-gpt-oss-120b': {
-    id: 'nvidia-gpt-oss-120b',
-    name: 'NVIDIA GPT-OSS-120B',
+  'nvidia-gpt-oss-20b': {
+    id: 'nvidia-gpt-oss-20b',
+    name: 'NVIDIA GPT-OSS-20B',
     description:
-      'OpenAI GPT-OSS-120B served via NVIDIA NIM. Reasoning model — needs max_tokens>=8192 because the reasoning_content stream alone can burn 2-4k tokens before content begins. Slow (40-50s TTFB) but high quality.',
+      'OpenAI GPT-OSS-20B served via NVIDIA NIM. Reasoning model — needs max_tokens>=8192 because the reasoning_content stream alone can burn 2-4k tokens before content begins. Faster than the sunset 120b variant (10-20s TTFB) while keeping high quality.',
     baseUrl: 'https://integrate.api.nvidia.com/v1/chat/completions',
-    model: 'openai/gpt-oss-120b',
+    model: 'openai/gpt-oss-20b',
     apiKeyPrefix: 'nvapi-',
-    docsUrl: 'https://build.nvidia.com/openai/gpt-oss-120b',
+    docsUrl: 'https://build.nvidia.com/openai/gpt-oss-20b',
     timeoutMs: 120_000,
     // Reasoning models: 2048 leaves zero room after reasoning. 8192 covers
     // ~6k reasoning + ~2k content, which fits our prompt + structured output.
@@ -68,7 +68,7 @@ export const MODELS: Record<ModelId, ModelConfig> = {
   },
 };
 
-export const DEFAULT_MODEL: ModelId = 'nvidia-gpt-oss-120b';
+export const DEFAULT_MODEL: ModelId = 'nvidia-gpt-oss-20b';
 
 export function getModelConfig(id: ModelId): ModelConfig {
   const cfg = MODELS[id];

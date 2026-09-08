@@ -5,14 +5,14 @@
 > Pipeline: Intent → Generate → Preview → Deploy, wired through a real `@langchain/langgraph` `StateGraph` with conditional retry edges and per-widget Elementor selector profiles.
 
 ![Pipeline Active](https://img.shields.io/badge/pipeline-active-emerald)
-![Model: GLM 5.1 + Nvidia 120B](https://img.shields.io/badge/model-GLM_5.1_+_Nvidia_120B-blue)
+![Model: GLM 5.1 + Nvidia 20B](https://img.shields.io/badge/model-GLM_5.1_+_Nvidia_20B-blue)
 ![Next.js 16](https://img.shields.io/badge/Next.js-16-black)
 ![LangGraph](https://img.shields.io/badge/LangGraph-1.4-purple)
 
 ## What it does
 
 1. **Intent** — User describes the animation (e.g. "Animated testimonial carousel with fade-in quotes and slide-in author names")
-2. **Generate** — LLM (Nvidia gpt-oss-120B *or* OpenCode Zen GLM 5.1) writes GSAP code targeting the right Elementor widget profile (testimonial, hero, cards, pricing, gallery, counter)
+2. **Generate** — LLM (Nvidia gpt-oss-20B *or* OpenCode Zen GLM 5.1) writes GSAP code targeting the right Elementor widget profile (testimonial, hero, cards, pricing, gallery, counter)
 3. **Parse + Validate** — `parseGsapNode` strips fences + normalizes IIFEs; `validateNode` runs structural checks (selectors present, primitives used, onerror handler, no multi-CDN load, matchMedia reverted)
 4. **Retry** — If validation fails, `retryGuardNode` builds a corrective prompt with the previous code + the failure issues, applies the NVIDIA adaptive cooldown, and routes back to `generateNode`
 5. **Output** — Final code + container structure + CSS selectors + scalability strategy, packaged into a `GenerateResponse`
@@ -24,7 +24,7 @@
 - **GSAP 3.13** — target animation library
 - **shadcn/ui / Radix UI** primitives
 - **Two providers:**
-  - **NVIDIA NIM** `openai/gpt-oss-120b` — slow (40-50s TTFB), but high quality; full adaptive cooldown
+  - **NVIDIA NIM** `openai/gpt-oss-20b` — moderate TTFB (10-20s), high quality; full adaptive cooldown. The 120b variant was sunset and is no longer available.
   - **OpenCode Zen** `glm-5.1` — fast (1.5s TTFB), gateway aliases to GLM-5.3; uses `reasoning_effort: "low"`; no cooldown
 
 ## Adaptive Cooldown (NVIDIA rate-limit handling)
@@ -135,7 +135,7 @@ This project was **recovered** from a now-deleted GitHub repo by downloading all
 - UI text strings (Intent / Generate / Preview / Deploy, presets, process-flow labels)
 - API routes (`/api/generate`, `/api/guide`)
 - Tech identifiers (GSAP, Next.js App Router, Radix UI primitives)
-- Model + provider config (GLM 5.1, Nvidia 120B, LangGraph)
+- Model + provider config (GLM 5.1, Nvidia 20B, LangGraph)
 
 The recovered logic was then rewritten as a real `@langchain/langgraph` `StateGraph` — not a cosmetic loop with `lg1-lg5` labels.
 

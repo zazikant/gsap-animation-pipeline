@@ -40,7 +40,7 @@ export function ConfigBar({
           className="flex items-center gap-1.5 text-xs font-medium text-zinc-700"
         >
           <Key className="h-3.5 w-3.5" />
-          {config.id === 'nvidia-gpt-oss-120b' ? 'NVIDIA API Key' : 'OpenCode API Key'}
+          {config.id === 'nvidia-gpt-oss-20b' ? 'NVIDIA API Key' : 'OpenCode API Key'}
           {keyCommitted && (
             <span className="ml-1 inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700">
               <Check className="h-3 w-3" /> saved
@@ -95,7 +95,7 @@ export function ConfigBar({
           )}
         </div>
         <p className="mt-1.5 text-[11px] text-zinc-500">
-          {config.id === 'nvidia-gpt-oss-120b' ? (
+          {config.id === 'nvidia-gpt-oss-20b' ? (
             <>
               Get a key at{' '}
               <a

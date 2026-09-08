@@ -46,7 +46,7 @@ export async function unifiedChatCompletion(
 ): Promise<UnifiedCallResult> {
   const config = getModelConfig(opts.modelId);
 
-  if (opts.modelId === 'nvidia-gpt-oss-120b') {
+  if (opts.modelId === 'nvidia-gpt-oss-20b') {
     const nvidiaOpts: NvidiaCallOptions = {
       model: config.model,
       messages: opts.messages as NvidiaChatMessage[],
