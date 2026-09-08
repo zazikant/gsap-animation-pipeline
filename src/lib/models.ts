@@ -42,7 +42,13 @@ export const MODELS: Record<ModelId, ModelConfig> = {
     model: 'openai/gpt-oss-20b',
     apiKeyPrefix: 'nvapi-',
     docsUrl: 'https://build.nvidia.com/openai/gpt-oss-20b',
-    timeoutMs: 120_000,
+    // 20b is faster than the sunset 120b on first-attempt prompts, but the
+    // retry path triples the prompt size (base + previousCode + previousTree
+    // + issues), and the reasoning step on that larger prompt can run >120s.
+    // 180s gives reasoning models enough room on retries without hitting
+    // Vercel's maxDuration when combined with DEFAULT_MAX_RETRIES=1 in
+    // nvidia-client.ts.
+    timeoutMs: 180_000,
     // Reasoning models: 2048 leaves zero room after reasoning. 8192 covers
     // ~6k reasoning + ~2k content, which fits our prompt + structured output.
     defaultMaxTokens: 8192,

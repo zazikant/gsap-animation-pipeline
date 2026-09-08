@@ -2,10 +2,15 @@ import { NextRequest } from 'next/server';
 import { runGenerationPipelineStream, type PipelineEvent } from '@/lib/generate-pipeline';
 import { MODELS, type ModelId } from '@/lib/models';
 
-// Worst-case wall time on NVIDIA path: 3 LLM calls × (45s TTFB + 30s cooldown)
-// = ~225s. OpenCode path: ~15s. 300s gives NVIDIA retries full headroom on
-// Vercel's Pro plan (maxDuration limit is 300 for Hobby, 800 for Pro).
-export const maxDuration = 300;
+// Worst-case wall time on NVIDIA path with the gpt-oss-20b migration:
+//   - Per-call timeout: 180s (reasoning models need room on retry prompts,
+//     which are ~3x larger than first-attempt prompts)
+//   - nvidia-client DEFAULT_MAX_RETRIES=1 (no doomed same-prompt retry on
+//     timeout; the pipeline-level retryGuardNode handles resiliency)
+//   - Pipeline maxAttempts=3 → worst case 3 × (180s LLM + 30s cooldown) = 630s
+// Vercel Pro maxDuration cap is 800s; 600s gives comfortable headroom for
+// the realistic case (1 success + 1 retry + 1 final attempt).
+export const maxDuration = 600;
 export const dynamic = 'force-dynamic';
 
 function sse(event: PipelineEvent): string {

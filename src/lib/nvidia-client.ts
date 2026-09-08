@@ -17,7 +17,12 @@ const NVIDIA_BASE_URL = 'https://integrate.api.nvidia.com/v1';
 export const DEFAULT_MODEL = 'openai/gpt-oss-20b';
 
 export const DEFAULT_CALL_TIMEOUT_MS = 180_000;
-export const DEFAULT_MAX_RETRIES = 2;
+// Single attempt per nvidiaChatCompletion call. Pipeline-level retry
+// (retryGuardNode → generateNode) handles resiliency with a cooldown, which
+// is more appropriate than an immediate same-prompt retry — particularly on
+// timeouts, where retrying the same oversized prompt is doomed to time out
+// again and burns the entire Vercel maxDuration budget.
+export const DEFAULT_MAX_RETRIES = 1;
 
 export interface NvidiaChatMessage {
   role: 'system' | 'user' | 'assistant';
