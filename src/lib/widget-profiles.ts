@@ -132,6 +132,42 @@ const HERO_TREE: ElementorWidget = {
   ],
 };
 
+// ─── Hero slider / banner with arrows (background-image + title + desc + nav) ──
+// Distinct from the plain hero: this is a navigation-driven banner where
+// left/right arrows step through a set of background-image + title +
+// description slides. Matches intents like "container with a background
+// image, sub-container with title and description, arrows on left and
+// right control overall navigation" — which is structurally a hero-slider
+// banner, NOT a generic image gallery.
+
+const HERO_SLIDER_TREE: ElementorWidget = {
+  id: 'hero-slider',
+  kind: 'Container',
+  label: 'Hero slider banner',
+  layout: 'relative',
+  children: [
+    // Background image layer — absolute, fills the container. Swapped on
+    // each slide transition (crossfade via gsap timeline).
+    { className: 'hero-slider-bg', kind: 'Image', label: 'Background image', layout: 'absolute fill', props: { src: 'images/slide-1.jpg' } },
+    // Left content sub-container — title + description, anchored left.
+    {
+      className: 'hero-slider-content',
+      kind: 'Container',
+      label: 'Left content panel',
+      layout: 'absolute left',
+      children: [
+        { className: 'hero-slider-title', kind: 'Heading', label: 'Slide title', props: { text: 'Slide 1 title' } },
+        { className: 'hero-slider-desc', kind: 'Text', label: 'Slide description', props: { text: 'Slide 1 description' } },
+      ],
+    },
+    // Navigation arrows — one-off elements, so they use `id` (user sets in
+    // Elementor Advanced tab). The model must querySelector these by id,
+    // NOT fabricate `.left-arrow` / `.right-arrow` class names.
+    { id: 'hero-slider-prev', kind: 'Button', label: 'Previous slide arrow', props: { label: 'Previous' } },
+    { id: 'hero-slider-next', kind: 'Button', label: 'Next slide arrow', props: { label: 'Next' } },
+  ],
+};
+
 // ─── Cards (Elementor Icon Box widget — auto-class) ────────────────────────
 
 const cardChild = (): ElementorWidget => ({
@@ -238,6 +274,29 @@ export const WIDGET_PROFILES: Record<string, WidgetProfile> = {
     ],
   },
 
+  // Hero slider / banner — navigation-driven hero with background image +
+  // title + description + arrows. MUST be matched before plain `hero` and
+  // before `gallery` (the "image" keyword would otherwise route background-
+  // image+arrows intents to the image-gallery profile, which generates
+  // a completely different component).
+  'hero-slider': {
+    widgetType: 'hero-slider',
+    width: 'w100',
+    breakpoint: 'lg-1',
+    notes:
+      'Hero slider banner: a single full-width container with a background image, a left-anchored sub-container holding a title + description, and left/right navigation arrows that step through a set of slides. Arrows are one-off elements (user sets ids #hero-slider-prev / #hero-slider-next in Elementor Advanced tab). Background image crossfades between slides; title + description update with each slide. NOT a generic gallery — the spec describes ONE container, not a grid of repeating images.',
+    selectors: [
+      '#hero-slider',
+      '#hero-slider .hero-slider-bg',
+      '#hero-slider .hero-slider-content',
+      '#hero-slider .hero-slider-title',
+      '#hero-slider .hero-slider-desc',
+      '#hero-slider-prev',
+      '#hero-slider-next',
+    ],
+    treeTemplate: HERO_SLIDER_TREE,
+  },
+
   hero: {
     widgetType: 'heading',
     width: 'w100',
@@ -324,15 +383,66 @@ export type WidgetKey = keyof typeof WIDGET_PROFILES;
 
 /**
  * Pick the right widget profile based on intent keywords.
+ *
+ * The matcher is ORDER-SENSITIVE — more specific patterns must come first
+ * to avoid false-positive matches on shared keywords. The most common
+ * false-positive is "background image" matching the `gallery` profile's
+ * "image" keyword and routing a hero-slider intent to image-gallery
+ * (which generates an entirely different component).
  */
 export function selectWidgetProfile(intent: string): WidgetProfile {
   const lc = intent.toLowerCase();
 
+  // ── Highest priority: explicit widget names ──
   if (lc.includes('testimonial') || lc.includes('quote')) return WIDGET_PROFILES.testimonial;
+
+  // ── Hero-slider: navigation-driven hero with background image + content
+  //    panel + arrows. Match this BEFORE plain `hero` (which would catch
+  //    on "hero") and BEFORE `gallery` (which would catch on "image" inside
+  //    "background image"). The discriminators are:
+  //      - "background image" + "arrow"/"arrows" + "navigation"/"control"
+  //      - OR "hero" + "arrow"/"slider"/"carousel"
+  //    The matcher must also require BOTH the background-image hint AND
+  //    navigation cues, so a plain "image gallery" intent doesn't get
+  //    routed here.
+  const hasBackgroundImage =
+    lc.includes('background image') ||
+    lc.includes('background-image') ||
+    lc.includes('bg image');
+  const hasArrows =
+    lc.includes('arrow') || lc.includes('slider') || lc.includes('carousel');
+  const hasNavigation =
+    lc.includes('navigation') || lc.includes('control') || lc.includes('navigate');
+  const hasTitleDesc =
+    (lc.includes('title') && lc.includes('description')) ||
+    lc.includes('title and description') ||
+    lc.includes('heading and description');
+
+  if (hasBackgroundImage && (hasArrows || hasNavigation) && hasTitleDesc) {
+    return WIDGET_PROFILES['hero-slider'];
+  }
+  // A simpler form: "hero" + "arrow"/"slider" (no need for all the
+  // background-image + title + desc cues — those are implied by "hero").
+  if (lc.includes('hero') && hasArrows) {
+    return WIDGET_PROFILES['hero-slider'];
+  }
+
+  // ── Plain hero (no arrows) ──
   if (lc.includes('hero')) return WIDGET_PROFILES.hero;
+
+  // ── Other named widgets ──
   if (lc.includes('card') || lc.includes('feature')) return WIDGET_PROFILES.cards;
   if (lc.includes('pricing') || lc.includes('price')) return WIDGET_PROFILES.pricing;
-  if (lc.includes('gallery') || lc.includes('image')) return WIDGET_PROFILES.gallery;
+  // gallery must explicitly require "gallery" or "grid of images" — NOT
+  // just "image", which collides with "background image" in hero-slider
+  // intents. A plain "image animation" intent still defaults to gallery
+  // below, but only after we've ruled out the hero-slider pattern.
+  if (lc.includes('gallery') || lc.includes('grid of image') || lc.includes('image grid')) {
+    return WIDGET_PROFILES.gallery;
+  }
+  // Fallback: if the intent says "image" but didn't match hero-slider
+  // above (e.g. "fade-in image on scroll"), route to gallery.
+  if (lc.includes('image')) return WIDGET_PROFILES.gallery;
   if (lc.includes('counter') || lc.includes('stat') || lc.includes('number')) return WIDGET_PROFILES.counter;
 
   // Default fallback — hero section (most generic)
