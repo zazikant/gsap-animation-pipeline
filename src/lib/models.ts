@@ -54,11 +54,11 @@ export const MODELS: Record<ModelId, ModelConfig> = {
     id: 'opencode-glm-5.1',
     name: 'OpenCode Zen — GLM 5.1',
     description:
-      'GLM 5.1 via opencode.ai/zen/go. The gateway now serves GLM 5.3 behind the glm-5.1 alias — thinking-only, so we use reasoning_effort "low". Fast and reliable.',
+      'GLM 5.1 via opencode.ai/zen/go. The gateway now serves GLM 5.3 behind the glm-5.1 alias — thinking-only, so we use reasoning_effort "low". Fast and reliable. The OpenCode Go gateway REQUIRES a stable `x-opencode-session` header per conversation (we mint one UUID per run and reuse it across retries for prompt-cache affinity) plus a custom `User-Agent`.',
     baseUrl: 'https://opencode.ai/zen/go/v1/chat/completions',
     model: 'glm-5.1',
     apiKeyPrefix: 'sk-',
-    docsUrl: 'https://opencode.ai/docs/zen',
+    docsUrl: 'https://opencode.ai/docs/go',
     timeoutMs: 50_000,
     defaultMaxTokens: 4096,
     reasoningEffort: 'low',

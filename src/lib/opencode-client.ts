@@ -11,6 +11,19 @@
  * GLM 5.3 rejects `reasoning_effort: "none"` with HTTP 400 (error 1210).
  * We use `reasoning_effort: "low"` to keep reasoning overhead minimal while
  * still returning the final answer in `content`.
+ *
+ * ─── Session header (OpenCode Go requirement) ───────────────────────────────
+ * Per the OpenCode Go docs (https://opencode.ai/docs/go/), clients MUST:
+ *   1. Identify themselves with a custom `User-Agent` (not a generic SDK UA)
+ *   2. Send a stable session ID in `x-opencode-session` per conversation so
+ *      the gateway can optimize routing + reuse prompt-cache slots across
+ *      retries within the same logical conversation.
+ *
+ * Without the session header the gateway returns HTTP 400 MissingSessionID
+ * (enforcement tightened 2026-09-06). Within a single pipeline run (which
+ * may retry generate→retry→generate) we use ONE stable UUID; across runs we
+ * generate a fresh one. Pattern lifted from
+ * `rag-document-assistant-opencode/src/lib/opencode.ts:9-47`.
  */
 
 import { sleep } from './rate-limit';
@@ -20,6 +33,22 @@ export const DEFAULT_OPENCODE_MODEL = 'glm-5.1';
 
 export const DEFAULT_CALL_TIMEOUT_MS = 50_000;
 export const DEFAULT_MAX_RETRIES = 1;
+
+/**
+ * Custom User-Agent per OpenCode Go docs: "Identify itself with its own user
+ * agent, such as `my-coding-agent/1.0`, rather than a generic SDK or
+ * HTTP-library name."
+ */
+const OPENCODE_USER_AGENT = 'gsap-animation-pipeline/0.1.0 (opencode-go)';
+
+/**
+ * Generate a stable per-conversation UUID using the Web Crypto API.
+ * Edge Runtime (Vercel serverless) can't import `node:crypto`, but
+ * `crypto.randomUUID()` is available in Node 19+ and all browsers.
+ */
+export function newOpencodeSessionId(): string {
+  return crypto.randomUUID();
+}
 
 export interface OpencodeChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -35,6 +64,14 @@ export interface OpencodeCallOptions {
   timeoutMs?: number;
   maxRetries?: number;
   reasoningEffort?: 'low' | 'medium' | 'high';
+  /**
+   * Stable per-conversation session ID sent in the `x-opencode-session`
+   * header. Required by the OpenCode Go gateway. The pipeline should pass
+   * the SAME id across generate → retry → generate so retries hit the
+   * gateway's prompt-cache slot. If omitted, a fresh UUID is generated
+   * per call (no cache affinity).
+   */
+  sessionId?: string;
   onLog?: (line: string) => void;
   onChunk?: (text: string) => void;
 }
@@ -58,14 +95,19 @@ async function streamOnce(
   apiKey: string,
   signal: AbortSignal,
   onChunk?: (text: string) => void,
+  sessionId?: string,
 ): Promise<{ content: string; reasoning: string; ttfbMs: number | null }> {
   const callStart = Date.now();
+  const sid = sessionId ?? newOpencodeSessionId();
   const response = await fetch(`${OPENCODE_BASE_URL}/v1/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
       Accept: 'text/event-stream',
+      // Required by OpenCode Go gateway — see file header.
+      'x-opencode-session': sid,
+      'User-Agent': OPENCODE_USER_AGENT,
     },
     body: JSON.stringify({ ...body, stream: true }),
     signal,
@@ -124,11 +166,12 @@ export async function opencodeChatCompletion(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
   const maxRetries = opts.maxRetries ?? DEFAULT_MAX_RETRIES;
   const reasoningEffort = opts.reasoningEffort ?? 'low';
+  const sessionId = opts.sessionId ?? newOpencodeSessionId();
   const callStart = Date.now();
 
   log(
     opts,
-    `start  model=${model} max_tokens=${opts.maxTokens ?? 4096} temp=${opts.temperature ?? 0.3} timeout=${timeoutMs}ms reasoning_effort=${reasoningEffort}`,
+    `start  model=${model} max_tokens=${opts.maxTokens ?? 4096} temp=${opts.temperature ?? 0.3} timeout=${timeoutMs}ms reasoning_effort=${reasoningEffort} session=${sessionId}`,
   );
 
   let lastErr: Error | null = null;
@@ -148,12 +191,13 @@ export async function opencodeChatCompletion(
         opts.apiKey,
         controller.signal,
         opts.onChunk,
+        sessionId,
       );
       clearTimeout(timeout);
       const elapsed = Date.now() - callStart;
       log(
         opts,
-        `ttfb=${ttfbMs ?? 'n/a'}ms  done attempt=${attempt} elapsed=${elapsed}ms content_chars=${content.length} reasoning_chars=${reasoning.length}`,
+        `ttfb=${ttfbMs ?? 'n/a'}ms  done attempt=${attempt} elapsed=${elapsed}ms content_chars=${content.length} reasoning_chars=${reasoning.length} session=${sessionId}`,
       );
       if (!content) {
         throw new Error(
@@ -166,19 +210,19 @@ export async function opencodeChatCompletion(
       const e = err as Error;
       lastErr = e;
       if (e.name === 'AbortError') {
-        log(opts, `TIMEOUT attempt=${attempt} after ${timeoutMs}ms`);
+        log(opts, `TIMEOUT attempt=${attempt} after ${timeoutMs}ms session=${sessionId}`);
       } else {
-        log(opts, `ERROR attempt=${attempt}: ${e.name}: ${e.message.slice(0, 200)}`);
+        log(opts, `ERROR attempt=${attempt}: ${e.name}: ${e.message.slice(0, 200)} session=${sessionId}`);
       }
       if (attempt < maxRetries) {
         const backoff = 500 * attempt;
-        log(opts, `retry  backing off ${backoff}ms before attempt ${attempt + 1}`);
+        log(opts, `retry  backing off ${backoff}ms before attempt ${attempt + 1} session=${sessionId}`);
         await sleep(backoff);
       }
     }
   }
   throw new Error(
-    `OpenCode call failed after ${maxRetries} attempts: ${lastErr?.name}: ${lastErr?.message}`,
+    `OpenCode call failed after ${maxRetries} attempts (session=${sessionId}): ${lastErr?.name}: ${lastErr?.message}`,
   );
 }
 
@@ -191,6 +235,7 @@ export async function callOpencodeLLM(
   temperature: number = 0.3,
   onLog?: (line: string) => void,
   onChunk?: (text: string) => void,
+  sessionId?: string,
 ): Promise<string> {
   const result = await opencodeChatCompletion({
     model,
@@ -203,6 +248,7 @@ export async function callOpencodeLLM(
     apiKey,
     onLog,
     onChunk,
+    sessionId,
   });
   return result.content;
 }

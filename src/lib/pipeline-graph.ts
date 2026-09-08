@@ -32,6 +32,7 @@ import {
   type WidgetProfile,
 } from './widget-profiles';
 import { stripCodeFences, normalizeGsapCode, validateGsapCode, validateCodeAgainstTree } from './gsap-utils';
+import { newOpencodeSessionId } from './opencode-client';
 import type { GenerateResponse, ElementorContainer } from './generate-pipeline';
 import type { ElementorWidgetValidated } from './elementor-widget';
 import {
@@ -68,6 +69,12 @@ export interface PipelineState {
   attempts: number;
   /** Max retries before forcing output with current best */
   maxAttempts: number;
+  /**
+   * Stable per-run OpenCode session ID. Minted once when the run starts and
+   * reused for every LLM call so retries hit the same gateway prompt-cache
+   * slot. Only meaningful for the OpenCode provider; NVIDIA ignores it.
+   */
+  sessionId: string;
   /** Conversation history for the LangGraph "thinking" trace */
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
   /** Append-only log lines for the UI */
@@ -141,6 +148,10 @@ const PipelineAnnotation = Annotation.Root({
   maxAttempts: Annotation<number>({
     reducer: (_x, y) => y,
     default: () => 3,
+  }),
+  sessionId: Annotation<string>({
+    reducer: (_x, y) => y,
+    default: () => '',
   }),
   messages: Annotation<Array<{ role: 'system' | 'user' | 'assistant'; content: string }>>({
     reducer: (x, y) => x.concat(y),
@@ -271,6 +282,12 @@ async function generateNode(
   // Always bump the attempt counter — even on error — so shouldRetry can terminate.
   const nextAttempt = state.attempts + 1;
 
+  // Surface the session ID in the log so retries in the UI confirm they're
+  // hitting the same gateway cache slot.
+  if (state.sessionId) {
+    ctx.log(`[generate] session=${state.sessionId}`);
+  }
+
   let code = '';
   try {
     code = await callUnifiedLLM(
@@ -282,6 +299,7 @@ async function generateNode(
       0.3,
       (line) => ctx.emit({ type: 'log', ts: Date.now(), line: `[generate] ${line}` }),
       (chunk) => ctx.emit({ type: 'chunk', ts: Date.now(), text: chunk }),
+      state.sessionId,
     );
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -583,6 +601,10 @@ export async function runGenerationPipelineStream(opts: RunOptions): Promise<Gen
     isValid: false,
     attempts: 0,
     maxAttempts: 3,
+    // Stable per-run session ID. OpenCode uses it for prompt-cache routing;
+    // NVIDIA ignores it. Lives only for the duration of this run — a fresh
+    // UUID is minted for each /api/generate request.
+    sessionId: newOpencodeSessionId(),
     messages: [],
     stageTrace: [],
     container: null,

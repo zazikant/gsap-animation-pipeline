@@ -22,6 +22,12 @@ export interface UnifiedCallOptions {
   apiKey: string;
   temperature?: number;
   maxTokens?: number;
+  /**
+   * Stable per-conversation session ID. Forwarded to the OpenCode provider
+   * (sent in `x-opencode-session`) so retries within the same pipeline run
+   * benefit from prompt-cache affinity. Ignored by the NVIDIA provider.
+   */
+  sessionId?: string;
   onLog?: (line: string) => void;
   onChunk?: (text: string) => void;
 }
@@ -65,6 +71,7 @@ export async function unifiedChatCompletion(
       maxTokens: opts.maxTokens,
       timeoutMs: config.timeoutMs,
       reasoningEffort: config.reasoningEffort,
+      sessionId: opts.sessionId,
       onLog: opts.onLog,
       onChunk: opts.onChunk,
     };
@@ -84,6 +91,7 @@ export async function callUnifiedLLM(
   temperature?: number,
   onLog?: (line: string) => void,
   onChunk?: (text: string) => void,
+  sessionId?: string,
 ): Promise<string> {
   const r = await unifiedChatCompletion({
     modelId,
@@ -94,6 +102,7 @@ export async function callUnifiedLLM(
     ],
     maxTokens,
     temperature,
+    sessionId,
     onLog,
     onChunk,
   });

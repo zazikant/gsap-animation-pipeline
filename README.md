@@ -41,6 +41,21 @@ Pattern lifted from `ax-translator/src/app/page.tsx:727-786`:
 
 The UI shows a live countdown of remaining seconds per cooldown.
 
+## OpenCode session header (`x-opencode-session`)
+
+The OpenCode Go gateway requires every request to carry two custom headers per [the official docs](https://opencode.ai/docs/go/#where-can-i-use-it):
+
+1. **`User-Agent: gsap-animation-pipeline/0.1.0 (opencode-go)`** — identifies this client (not a generic SDK UA).
+2. **`x-opencode-session: <uuid>`** — a stable per-conversation session ID so the gateway can optimize routing + reuse prompt-cache slots across retries.
+
+Pattern lifted from [`rag-document-assistant-opencode/src/lib/opencode.ts`](https://github.com/zazikant/rag-document-assistant-opencode/blob/main/src/lib/opencode.ts).
+
+- A fresh UUID is minted at the start of every `/api/generate` invocation (`runGenerationPipelineStream` in `src/lib/pipeline-graph.ts`).
+- The same UUID is sent on every `generateNode` LLM call inside that run — including retries — so the `generate → validate → retry → generate` loop hits the same gateway cache slot.
+- NVIDIA requests ignore the session ID entirely.
+
+You can see the session ID in the live log (e.g. `[opencode] start … session=550e8400-e29b-41d4-a716-446655440000`).
+
 ## Local development
 
 ```bash
