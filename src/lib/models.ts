@@ -37,18 +37,23 @@ export const MODELS: Record<ModelId, ModelConfig> = {
     id: 'nvidia-gpt-oss-20b',
     name: 'NVIDIA GPT-OSS-20B',
     description:
-      'OpenAI GPT-OSS-20B served via NVIDIA NIM. Reasoning model — needs max_tokens>=8192 because the reasoning_content stream alone can burn 2-4k tokens before content begins. Faster than the sunset 120b variant (10-20s TTFB) while keeping high quality.',
+      'OpenAI GPT-OSS-20B served via NVIDIA NIM. Reasoning model — needs max_tokens>=8192 because the reasoning_content stream alone can burn 2-4k tokens before content begins. WARNING on Vercel Hobby: per-call timeout is 50s (Vercel 60s cap), so ~10-20% of complex intents will time out. Switch to GLM 5.1 below or run locally for full retry support.',
     baseUrl: 'https://integrate.api.nvidia.com/v1/chat/completions',
     model: 'openai/gpt-oss-20b',
     apiKeyPrefix: 'nvapi-',
     docsUrl: 'https://build.nvidia.com/openai/gpt-oss-20b',
-    // 20b is faster than the sunset 120b on first-attempt prompts, but the
-    // retry path triples the prompt size (base + previousCode + previousTree
-    // + issues), and the reasoning step on that larger prompt can run >120s.
-    // 180s gives reasoning models enough room on retries without hitting
-    // Vercel's maxDuration when combined with DEFAULT_MAX_RETRIES=1 in
-    // nvidia-client.ts.
-    timeoutMs: 180_000,
+    // Vercel Hobby caps serverless functions at 60s. gpt-oss-20b's reasoning
+    // step is unpredictable — first-attempt prompts usually finish in 25-45s
+    // but ~10-20% of intents take 50-70s. Setting per-call timeout to 50s:
+    //   - Lets the nvidia-client throw a clean TIMEOUT error after 50s
+    //   - Leaves 10s buffer for parse/validate/output stages to run + emit
+    //     the pipeline-end event before Vercel's 60s hard cap
+    //   - Without this, Vercel silently kills the function at 60s with no
+    //     error event, leaving the UI stuck on "Generating…"
+    //
+    // On local dev (no Vercel cap) or Vercel Pro/Enterprise, bump this to
+    // 180_000 to give reasoning models the full room they want.
+    timeoutMs: 50_000,
     // Reasoning models: 2048 leaves zero room after reasoning. 8192 covers
     // ~6k reasoning + ~2k content, which fits our prompt + structured output.
     defaultMaxTokens: 8192,

@@ -170,6 +170,15 @@ export async function nvidiaChatCompletion(
       lastErr = e;
       if (e.name === 'AbortError') {
         log(opts, `TIMEOUT attempt=${attempt} after ${timeoutMs}ms`);
+        // Replace generic AbortError with an actionable message — without
+        // this, users see "NVIDIA call failed after 1 attempts: AbortError:
+        // The user aborted a request" which gives no clue what to do.
+        lastErr = new Error(
+          `LLM timed out after ${Math.round(timeoutMs / 1000)}s. The reasoning model ` +
+          `gpt-oss-20b is unpredictable — try a shorter/simpler intent, switch to ` +
+          `the faster GLM 5.1 model in the dropdown, or run locally with ` +
+          `\`npm run dev\` (no 60s Vercel cap).`,
+        );
       } else {
         log(opts, `ERROR attempt=${attempt}: ${e.name}: ${e.message.slice(0, 200)}`);
       }

@@ -4,17 +4,18 @@ import { MODELS, type ModelId } from '@/lib/models';
 
 // Vercel maxDuration — must fit the user's plan or the BUILD FAILS:
 //   Hobby: 60s · Pro (serverless): 300s · Pro + Fluid: 800s · Enterprise: 900s
-// We default to 60s (Hobby-safe) so the build succeeds on every plan. On
-// Hobby this only leaves room for the first-attempt pipeline (~45s); the
-// retry path needs more headroom and will be killed by Vercel at 60s.
+// We default to 60s (Hobby-safe) so the build succeeds on every plan.
 //
-// To enable retries on a higher Vercel plan, bump this number:
-//   - Pro (serverless): set to 300
-//   - Pro + Fluid compute: set to 600
-//   - Enterprise: set to 600
-// The per-call LLM timeout in lib/models.ts (180s) and pipeline maxAttempts
-// (3) are sized for that 600s budget — they work fully on local dev (`npm
-// run dev` has no Vercel cap) and on Pro+ with the bumped maxDuration.
+// The per-call LLM timeout in lib/models.ts (50s for gpt-oss-20b) is sized
+// to fit this 60s cap: 50s LLM + ~5s for parse/validate/output + 5s buffer.
+// If the LLM call exceeds 50s, nvidia-client throws a clean TIMEOUT error
+// with an actionable message ("try a simpler intent, switch to GLM 5.1, or
+// run locally"), and the pipeline emits a pipeline-end event before
+// Vercel's 60s hard cap kicks in.
+//
+// On Vercel Pro/Enterprise, bump BOTH this maxDuration (300/600) AND the
+// gpt-oss-20b timeoutMs in lib/models.ts (180_000) to enable the full
+// retry path. Pipeline maxAttempts=3 is already sized for the 600s budget.
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 

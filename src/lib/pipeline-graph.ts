@@ -587,6 +587,23 @@ let _globalEmit: (e: PipelineEvent) => void = () => {};
 export async function runGenerationPipelineStream(opts: RunOptions): Promise<GenerateResponse> {
   _globalEmit = opts.emit;
   const graph = buildGraph();
+
+  // Adaptive maxAttempts — protect against Vercel Hobby's 60s cap:
+  //   - NVIDIA gpt-oss-20b has a 50s per-call timeout on Vercel Hobby
+  //     (set in lib/models.ts to fit Vercel's 60s cap). Even one attempt
+  //     can hit 50s, so a retry would push wall time to 100s+ → Vercel
+  //     kills us. Force maxAttempts=1 so the pipeline emits a clean
+  //     pipeline-end with the timeout error rather than getting
+  //     hard-killed on the second attempt.
+  //   - OpenCode GLM 5.1 is fast (typical 5-15s) and its 50s timeout is
+  //     only a safety ceiling, so retries always fit → maxAttempts=3.
+  //   - On local dev or Vercel Pro/Enterprise (bumped timeoutMs to 180s),
+  //     NVIDIA gets maxAttempts=3 to enable the full retry path.
+  const modelCfg = getModelConfig(opts.modelId);
+  const isNvidiaOnVercelHobby =
+    opts.modelId === 'nvidia-gpt-oss-20b' && modelCfg.timeoutMs <= 60_000;
+  const maxAttempts = isNvidiaOnVercelHobby ? 1 : 3;
+
   const initial: PipelineState = {
     intent: opts.intent,
     presetId: opts.presetId,
@@ -600,7 +617,7 @@ export async function runGenerationPipelineStream(opts: RunOptions): Promise<Gen
     validationIssues: [],
     isValid: false,
     attempts: 0,
-    maxAttempts: 3,
+    maxAttempts,
     // Stable per-run session ID. OpenCode uses it for prompt-cache routing;
     // NVIDIA ignores it. Lives only for the duration of this run — a fresh
     // UUID is minted for each /api/generate request.
