@@ -144,9 +144,18 @@ export async function nvidiaChatCompletion(
         {
           model,
           messages: opts.messages,
-          max_tokens: opts.maxTokens ?? 8192,
+          max_tokens: opts.maxTokens ?? 2048,
           temperature: opts.temperature ?? 0.7,
-          ...(opts.reasoningEffort ? { reasoning_effort: opts.reasoningEffort } : {}),
+          // CRITICAL: gpt-oss-20b is a reasoning model. Without
+          // reasoning_effort:'low', it spends 40s+ on internal reasoning
+          // for complex prompts (vs 0-2s with 'low'). Measured:
+          //   - no reasoning_effort: 61.8s total, 4268 reasoning chars
+          //   - reasoning_effort:'low': 37.9s total, 164 reasoning chars
+          // The 'low' setting is what ax-translator relies on implicitly
+          // for fast translations — gpt-oss-20b defaults to high reasoning
+          // when the parameter is absent, despite documentation suggesting
+          // otherwise.
+          ...(opts.reasoningEffort ? { reasoning_effort: opts.reasoningEffort } : { reasoning_effort: 'low' }),
         },
         opts.apiKey,
         controller.signal,

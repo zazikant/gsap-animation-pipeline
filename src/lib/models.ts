@@ -37,27 +37,33 @@ export const MODELS: Record<ModelId, ModelConfig> = {
     id: 'nvidia-gpt-oss-20b',
     name: 'NVIDIA GPT-OSS-20B',
     description:
-      'OpenAI GPT-OSS-20B served via NVIDIA NIM. Reasoning model — needs max_tokens>=8192 because the reasoning_content stream alone can burn 2-4k tokens before content begins. WARNING on Vercel Hobby: per-call timeout is 50s (Vercel 60s cap), so ~10-20% of complex intents will time out. Switch to GLM 5.1 below or run locally for full retry support.',
+      'OpenAI GPT-OSS-20B served via NVIDIA NIM. Reasoning model. Runs on Vercel Edge runtime (ax-translator pattern) — Node serverless silently hangs on gpt-oss-20b, but Edge uses a different egress that works. Reasoning effort is intentionally left unset (the default); max_tokens=4096 leaves room for code + JSON tree without letting the model burn tokens on excessive reasoning.',
     baseUrl: 'https://integrate.api.nvidia.com/v1/chat/completions',
     model: 'openai/gpt-oss-20b',
     apiKeyPrefix: 'nvapi-',
     docsUrl: 'https://build.nvidia.com/openai/gpt-oss-20b',
-    // Vercel Hobby caps serverless functions at 60s. gpt-oss-20b's reasoning
-    // step is unpredictable — first-attempt prompts usually finish in 25-45s
-    // but ~10-20% of intents take 50-70s. Setting per-call timeout to 50s:
-    //   - Lets the nvidia-client throw a clean TIMEOUT error after 50s
-    //   - Leaves 10s buffer for parse/validate/output stages to run + emit
-    //     the pipeline-end event before Vercel's 60s hard cap
-    //   - Without this, Vercel silently kills the function at 60s with no
-    //     error event, leaving the UI stuck on "Generating…"
-    //
-    // On local dev (no Vercel cap) or Vercel Pro/Enterprise, bump this to
-    // 180_000 to give reasoning models the full room they want.
+    // 50s per-call timeout. Combined with Edge runtime (route.ts), this
+    // is what ax-translator uses to make gpt-oss-20b reliable on Vercel.
+    // The KEY fix is Edge runtime — Vercel Node serverless silently hangs
+    // on gpt-oss-20b (confirmed by ax-translator's debug endpoint). Edge
+    // uses a different egress that completes the same call in 8-30s.
+    // We give the model 50s of room; on Vercel Hobby Edge runtime the
+    // function is capped at 30s, so Vercel kills long calls at 30s and
+    // our 50s timeout is the upper bound on Pro/local-dev.
     timeoutMs: 50_000,
-    // Reasoning models: 2048 leaves zero room after reasoning. 8192 covers
-    // ~6k reasoning + ~2k content, which fits our prompt + structured output.
-    defaultMaxTokens: 8192,
-    reasoningEffort: 'low',
+    // 4096 is plenty for our structured output (~2k tokens of GSAP code +
+    // ~500 tokens of tree JSON + a small reasoning buffer). ax-translator
+    // uses 2048 minimum; we go a bit higher because our prompt asks for
+    // structured code + JSON tree, not just a translation. 8192 (the old
+    // value) gave the reasoning model permission to burn 4-6k tokens on
+    // internal reasoning before any content appeared — that's what was
+    // pushing TTFB past 50s on Node serverless.
+    defaultMaxTokens: 4096,
+    // NOTE: reasoning_effort is intentionally NOT sent. ax-translator
+    // doesn't send it, and our local tests showed gpt-oss-20b produces
+    // good output without it. Sending 'low' was making the model spend
+    // more tokens on reasoning_content, not less.
+    reasoningEffort: 'low', // kept in config for type-compat; nvidia-client ignores it now
     cooldownMultiplier: 1,
     retryBackoffMultiplier: 1,
   },

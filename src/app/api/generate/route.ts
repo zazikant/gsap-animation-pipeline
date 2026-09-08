@@ -2,20 +2,26 @@ import { NextRequest } from 'next/server';
 import { runGenerationPipelineStream, type PipelineEvent } from '@/lib/generate-pipeline';
 import { MODELS, type ModelId } from '@/lib/models';
 
-// Vercel maxDuration — must fit the user's plan or the BUILD FAILS:
-//   Hobby: 60s · Pro (serverless): 300s · Pro + Fluid: 800s · Enterprise: 900s
-// We default to 60s (Hobby-safe) so the build succeeds on every plan.
+// Edge runtime — CRITICAL for gpt-oss-20b on Vercel.
 //
-// The per-call LLM timeout in lib/models.ts (50s for gpt-oss-20b) is sized
-// to fit this 60s cap: 50s LLM + ~5s for parse/validate/output + 5s buffer.
-// If the LLM call exceeds 50s, nvidia-client throws a clean TIMEOUT error
-// with an actionable message ("try a simpler intent, switch to GLM 5.1, or
-// run locally"), and the pipeline emits a pipeline-end event before
-// Vercel's 60s hard cap kicks in.
+// This pattern is lifted from ax-translator/src/app/api/translate/route.ts,
+// which documents the discovery:
 //
-// On Vercel Pro/Enterprise, bump BOTH this maxDuration (300/600) AND the
-// gpt-oss-20b timeoutMs in lib/models.ts (180_000) to enable the full
-// retry path. Pipeline maxAttempts=3 is already sized for the 600s budget.
+//   "Vercel's Node serverless path hangs on openai/gpt-oss-120b
+//    (confirmed via /api/debug). Edge uses a different egress that works."
+//
+// The same hang affects gpt-oss-20b — on Node serverless, NVIDIA API calls
+// silently exceed the 50s per-call timeout, even when the same call
+// completes in ~30s locally or via curl from the same machine. Edge
+// runtime uses a different network egress that doesn't have this issue.
+//
+// Edge runtime maxDuration caps:
+//   - Hobby: 30s
+//   - Pro: 300s
+// We set maxDuration=60. On Hobby Edge, Vercel will cap the actual run at
+// 30s — that's enough for first-attempt zero-shot generation. On Pro, the
+// full 60s budget is available.
+export const runtime = 'edge';
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 
@@ -24,21 +30,24 @@ function sse(event: PipelineEvent): string {
 }
 
 export async function POST(request: NextRequest) {
-  // ─── Auth: API key travels in `Authorization: Bearer` (mirrors
-  // `google-ads-subagent-vercel/app/api/chat-stream/route.ts`).
-  const auth = request.headers.get('Authorization') ?? '';
-  if (!auth.startsWith('Bearer ')) {
+  // ─── Auth: prefer server-side NVIDIA_API_KEY (ax-translator pattern).
+  // If absent, fall back to Bearer header from the client UI. This lets
+  // the user paste their own key for testing while still allowing the
+  // deployed site to ship with a server-side key.
+  const serverKey = process.env.NVIDIA_API_KEY;
+  const authHeader = request.headers.get('Authorization') ?? '';
+  const bearerKey = authHeader.startsWith('Bearer ')
+    ? authHeader.slice('Bearer '.length).trim()
+    : '';
+  const apiKey = serverKey || bearerKey;
+  if (!apiKey) {
     return new Response(
-      JSON.stringify({ error: 'Missing Authorization: Bearer <apiKey> header' }),
+      JSON.stringify({
+        error:
+          'Missing API key. Either set NVIDIA_API_KEY in your Vercel env vars, or paste a key in the UI ConfigBar.',
+      }),
       { status: 401, headers: { 'Content-Type': 'application/json' } },
     );
-  }
-  const apiKey = auth.slice('Bearer '.length).trim();
-  if (!apiKey) {
-    return new Response(JSON.stringify({ error: 'Empty API key' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json' },
-    });
   }
 
   // ─── Body: intent + optional modelId + presetId.
