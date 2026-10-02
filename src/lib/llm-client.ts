@@ -39,6 +39,10 @@ export interface UnifiedCallResult {
   elapsedMs: number;
   attempts: number;
   provider: ModelId;
+  /** Number of continuation rounds that were triggered (0 if the model finished in one call). */
+  continuations: number;
+  /** True if the model exhausted all continuations and is STILL truncated. */
+  truncated: boolean;
 }
 
 export async function unifiedChatCompletion(
