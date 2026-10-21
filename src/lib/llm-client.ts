@@ -66,7 +66,7 @@ export async function unifiedChatCompletion(
     return { ...r, provider: opts.modelId };
   }
 
-  if (opts.modelId === 'opencode-glm-5.1') {
+  if (opts.modelId === 'opencode-glm-5.3') {
     const opencodeOpts: OpencodeCallOptions = {
       model: config.model,
       messages: opts.messages as OpencodeChatMessage[],

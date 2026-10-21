@@ -4,10 +4,10 @@
  * Both providers expose an OpenAI-compatible /v1/chat/completions endpoint.
  * The default model is NVIDIA NIM gpt-oss-20b (the 120b variant was sunset,
  * so the pipeline was migrated to the smaller, faster 20b model). OpenCode
- * Zen with GLM 5.1 is the alternative fast/cheap provider.
+ * Zen with GLM 5.3 is the alternative fast/cheap provider.
  */
 
-export type ModelId = 'nvidia-gpt-oss-20b' | 'opencode-glm-5.1';
+export type ModelId = 'nvidia-gpt-oss-20b' | 'opencode-glm-5.3';
 
 export interface ModelConfig {
   readonly id: ModelId;
@@ -67,13 +67,13 @@ export const MODELS: Record<ModelId, ModelConfig> = {
     cooldownMultiplier: 1,
     retryBackoffMultiplier: 1,
   },
-  'opencode-glm-5.1': {
-    id: 'opencode-glm-5.1',
-    name: 'OpenCode Zen — GLM 5.1',
+  'opencode-glm-5.3': {
+    id: 'opencode-glm-5.3',
+    name: 'OpenCode Zen — GLM 5.3',
     description:
-      'GLM 5.1 via opencode.ai/zen/go. The gateway now serves GLM 5.3 behind the glm-5.1 alias — thinking-only, so we use reasoning_effort "low". Fast and reliable (typical 5-15s). The OpenCode Go gateway REQUIRES a stable `x-opencode-session` header per conversation (we mint one UUID per run and reuse it across retries for prompt-cache affinity) plus a custom `User-Agent`. The same ax-translator-inspired prompt simplification that made NVIDIA gpt-oss-20b reliable also applies here — the trimmed ANIMATION_SYSTEM_PROMPT (~1.4KB) is shared by both routes via the unified LLM dispatcher.',
+      'GLM 5.3 via opencode.ai/zen/go. Thinking-only model, so we use reasoning_effort "low". Fast and reliable (typical 5-15s). The OpenCode Go gateway REQUIRES a stable `x-opencode-session` header per conversation (we mint one UUID per run and reuse it across retries for prompt-cache affinity) plus a custom `User-Agent`. The same ax-translator-inspired prompt simplification that made NVIDIA gpt-oss-20b reliable also applies here — the trimmed ANIMATION_SYSTEM_PROMPT (~1.4KB) is shared by both routes via the unified LLM dispatcher.',
     baseUrl: 'https://opencode.ai/zen/go/v1/chat/completions',
-    model: 'glm-5.1',
+    model: 'glm-5.3',
     apiKeyPrefix: 'sk-',
     docsUrl: 'https://opencode.ai/docs/go',
     timeoutMs: 50_000,

@@ -67,13 +67,13 @@ export async function POST(request: NextRequest) {
   // uses NVIDIA_API_KEY; OpenCode uses OPENCODE_API_KEY. If neither is
   // set, we fall back to the client-provided Bearer key (UI ConfigBar).
   const serverKey =
-    resolvedModelId === 'opencode-glm-5.1'
+    resolvedModelId === 'opencode-glm-5.3'
       ? process.env.OPENCODE_API_KEY
       : process.env.NVIDIA_API_KEY;
   const apiKey = serverKey || bearerKey;
   if (!apiKey) {
     const envVarName =
-      resolvedModelId === 'opencode-glm-5.1'
+      resolvedModelId === 'opencode-glm-5.3'
         ? 'OPENCODE_API_KEY'
         : 'NVIDIA_API_KEY';
     return new Response(

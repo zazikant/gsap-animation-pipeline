@@ -1,12 +1,12 @@
 /**
- * OpenCode Zen (GLM 5.1) API client — OpenAI Chat Completions interface.
+ * OpenCode Zen (GLM 5.3) API client — OpenAI Chat Completions interface.
  *
  * Lifted from `ax-opencode-translator/src/lib/llm-client.ts` (post-fix) and
  * shaped to match the streaming-control pattern from
  * `ax-translator/src/lib/nvidia-client.ts`.
  *
  * Base URL: https://opencode.ai/zen/go
- * Model:    glm-5.1 (alias — gateway currently serves GLM 5.3 thinking-only)
+ * Model:    glm-5.3 (GLM 5.3 thinking-only)
  *
  * GLM 5.3 rejects `reasoning_effort: "none"` with HTTP 400 (error 1210).
  * We use `reasoning_effort: "low"` to keep reasoning overhead minimal while
@@ -29,7 +29,7 @@
 import { sleep } from './rate-limit';
 
 const OPENCODE_BASE_URL = 'https://opencode.ai/zen/go';
-export const DEFAULT_OPENCODE_MODEL = 'glm-5.1';
+export const DEFAULT_OPENCODE_MODEL = 'glm-5.3';
 
 export const DEFAULT_CALL_TIMEOUT_MS = 50_000;
 export const DEFAULT_MAX_RETRIES = 1;
