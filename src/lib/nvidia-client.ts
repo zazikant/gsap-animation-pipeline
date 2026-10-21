@@ -272,7 +272,7 @@ export async function nvidiaChatCompletion(
           lastErr = new Error(
             `LLM timed out after ${Math.round(timeoutMs / 1000)}s. The reasoning model ` +
             `gpt-oss-20b is unpredictable — try a shorter/simpler intent, switch to ` +
-            `the faster GLM 5.1 model in the dropdown, or run locally with ` +
+            `the faster GLM 5.3 model in the dropdown, or run locally with ` +
             `\`npm run dev\` (no 60s Vercel cap).`,
           );
         } else {

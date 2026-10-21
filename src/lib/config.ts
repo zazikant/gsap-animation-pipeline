@@ -18,7 +18,7 @@ export function loadConfig(): PersistedConfig {
     if (!raw) return { modelId: DEFAULT_MODEL, apiKey: '' };
     const parsed = JSON.parse(raw) as Partial<PersistedConfig>;
     return {
-      modelId: parsed.modelId === 'opencode-glm-5.1' ? 'opencode-glm-5.1' : DEFAULT_MODEL,
+      modelId: parsed.modelId === 'opencode-glm-5.3' ? 'opencode-glm-5.3' : DEFAULT_MODEL,
       apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : '',
     };
   } catch {

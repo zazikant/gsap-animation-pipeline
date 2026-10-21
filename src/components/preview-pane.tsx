@@ -80,7 +80,7 @@ export function PreviewPane({ generated, intent, onLooksGood, onReset }: Preview
             <p className="text-xs text-red-800">{generated.error}</p>
             <p className="pt-1 text-xs text-red-700">
               Try one of: (1) a shorter/simpler intent, (2) switch to{' '}
-              <span className="font-semibold">OpenCode GLM 5.1</span> in the model dropdown
+              <span className="font-semibold">OpenCode GLM 5.3</span> in the model dropdown
               (much faster), or (3) run locally with <code className="rounded bg-red-100 px-1">npm run dev</code> (no 60s Vercel cap).
             </p>
           </div>

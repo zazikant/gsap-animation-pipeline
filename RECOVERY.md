@@ -92,7 +92,7 @@ The recovered project went through several rounds of refinement:
 ### Iteration 2 — NVIDIA rate-limit pattern (from `ax-translator`)
 - Adaptive cooldown (10/30/60s based on prior stage outcome)
 - SSE streaming for live progress
-- Multi-provider support (NVIDIA + OpenCode GLM 5.1)
+- Multi-provider support (NVIDIA + OpenCode GLM 5.3)
 - Bearer-header auth pattern (from `google-ads-subagent-vercel`)
 
 ### Iteration 3 — Real LangGraph `StateGraph`

@@ -8,7 +8,7 @@
  *
  *   entryNode
  *     ↓
- *   generateNode          ← single LLM call (Nvidia 20B / OpenCode GLM 5.1)
+ *   generateNode          ← single LLM call (Nvidia 20B / OpenCode GLM 5.3)
  *     ↓                    using AX/DSPy-style signature in dspy-signature.ts
  *   parseGsapNode         ← strip fences, normalize IIFE; extract tree JSON
  *     ↓
@@ -609,7 +609,7 @@ export async function runGenerationPipelineStream(opts: RunOptions): Promise<Gen
   //     kills us. Force maxAttempts=1 so the pipeline emits a clean
   //     pipeline-end with the timeout error rather than getting
   //     hard-killed on the second attempt.
-  //   - OpenCode GLM 5.1 is fast (typical 5-15s) and its 50s timeout is
+  //   - OpenCode GLM 5.3 is fast (typical 5-15s) and its 50s timeout is
   //     only a safety ceiling, so retries always fit → maxAttempts=3.
   //   - On local dev or Vercel Pro/Enterprise (bumped timeoutMs to 180s),
   //     NVIDIA gets maxAttempts=3 to enable the full retry path.
@@ -662,7 +662,7 @@ export async function runGenerationPipelineStream(opts: RunOptions): Promise<Gen
       // it were a real (low-quality) generation, and the user can't tell
       // that the underlying cause was a 50s LLM timeout on Vercel Hobby.
       // The error message is actionable (see nvidia-client.ts): it tells
-      // the user to try a simpler intent, switch to GLM 5.1, or run
+      // the user to try a simpler intent, switch to GLM 5.3, or run
       // locally.
       opts.emit({ type: 'error', ts: Date.now(), message: final.error });
     }
