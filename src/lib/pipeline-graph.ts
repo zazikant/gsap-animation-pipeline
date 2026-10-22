@@ -4,19 +4,21 @@
  * Real StateGraph with conditional retry edges, not just a sequential for-loop
  * with cosmetic `lg1-lg5` labels.
  *
- * Flow:
+ * Flow (AX DSPy quality-gated — ported from atomic-graph-opencode):
  *
  *   entryNode
  *     ↓
- *   generateNode          ← single LLM call (Nvidia 20B / OpenCode GLM 5.3)
- *     ↓                    using AX/DSPy-style signature in dspy-signature.ts
+ *   generateNode          ← LLM call (Nvidia 20B / OpenCode GLM 5.3), temp 0.3;
+ *     ↓                    on retry: AX_REFINE_SYSTEM_PROMPT (fix-what-works) +
+ *                          DSPy-compiled refinement context, temp 0.2
  *   parseGsapNode         ← strip fences, normalize IIFE; extract tree JSON
- *     ↓
- *   validateNode          ← code rules + tree-shape assertions
- *     ↓                  ↘ retry?  ↓
- *   [conditional edge] ───→ retryGuardNode → generateNode (with feedback)
+ *     ↓                    (parseLLMJson + truncation recovery from the Bible)
+ *   validateNode          ← static code rules + tree-shape assertions +
+ *     ↓                    AX LLM rubric (score 0.0-1.0, temp 0.1, threshold 0.75)
+ *   [conditional edge] ──→ retryGuardNode → generateNode (compiled feedback)
  *     ↓                  ↗
- *   outputNode            ← terminal; emits GenerateResponse (code + tree)
+ *   outputNode            ← terminal; emits GenerateResponse (code + tree +
+ *                           real validation scores)
  *
  * Each node emits SSE events (stage-start / log / stage-end) so the UI shows
  * live progress. Between LLM nodes we insert the adaptive cooldown from
@@ -43,6 +45,20 @@ import {
   ANIMATION_SYSTEM_PROMPT,
   type AnimationPrediction,
 } from './dspy-signature';
+import {
+  AX_VALIDATE_SYSTEM_PROMPT,
+  AX_REFINE_SYSTEM_PROMPT,
+  buildValidateUserPrompt,
+  compileRefinePrompt,
+  getStageTemperature,
+  parseLLMJson,
+  recoverTruncatedJSON,
+  callWithRetryAwareness,
+  VALIDATION_THRESHOLD,
+  MAX_ITERATIONS,
+  type ErrorEntry,
+  type AxValidationResult,
+} from './ax-quality';
 
 // ─── State shape ─────────────────────────────────────────────────────────────
 
@@ -65,6 +81,14 @@ export interface PipelineState {
   validationIssues: string[];
   /** Validation pass/fail */
   isValid: boolean;
+  /** LLM rubric score 0.0-1.0 from the AX validate stage (Bible VALIDATE) */
+  llmScore: number;
+  /** Final 0-100 quality score attached to GenerateResponse (Bible score × 100) */
+  qualityScore: number;
+  /** DSPy error history — every failed LLM call (Bible callWithRetryAwareness) */
+  errorHistory: ErrorEntry[];
+  /** Compiled refinement context (Bible compileRefinePrompt) for the next retry */
+  refineContext: string;
   /** Total LLM calls so far (translate retry → generate cycles) */
   attempts: number;
   /** Max retries before forcing output with current best */
@@ -140,6 +164,22 @@ const PipelineAnnotation = Annotation.Root({
   isValid: Annotation<boolean>({
     reducer: (_x, y) => y,
     default: () => false,
+  }),
+  llmScore: Annotation<number>({
+    reducer: (_x, y) => y,
+    default: () => 0,
+  }),
+  qualityScore: Annotation<number>({
+    reducer: (_x, y) => y,
+    default: () => 0,
+  }),
+  errorHistory: Annotation<ErrorEntry[]>({
+    reducer: (_x, y) => y,
+    default: () => [],
+  }),
+  refineContext: Annotation<string>({
+    reducer: (_x, y) => y,
+    default: () => '',
   }),
   attempts: Annotation<number>({
     reducer: (x, y) => y,
@@ -268,16 +308,26 @@ async function generateNode(
   const profile = state.widgetProfile!;
   const isRetry = state.attempts > 0 && state.validationIssues.length > 0;
   ctx.log(
-    `[generate] attempt ${state.attempts + 1}/${state.maxAttempts}${isRetry ? ' (retry with feedback)' : ''}`,
+    `[generate] attempt ${state.attempts + 1}/${state.maxAttempts}${isRetry ? ' (AX refine with feedback)' : ''}`,
   );
 
-  const userPrompt = buildUserPrompt({
+  let userPrompt = buildUserPrompt({
     intent: state.intent,
     widgetProfile: profile,
     previousCode: isRetry ? state.rawCode : undefined,
     previousTreeJson: isRetry ? state.rawTreeJson : undefined,
     validationIssues: isRetry ? state.validationIssues : undefined,
   });
+
+  // AX DSPy (Bible pattern): stage-specific system prompt — on retry use the
+  // REFINE prompt (fix what already works) instead of full regeneration, and
+  // append the DSPy-compiled refinement context from the error history.
+  const systemPrompt = isRetry ? AX_REFINE_SYSTEM_PROMPT : ANIMATION_SYSTEM_PROMPT;
+  const temperature = isRetry ? getStageTemperature('refine') : getStageTemperature('generate');
+  if (isRetry && state.refineContext) {
+    userPrompt = `${userPrompt}\n\n${state.refineContext}`;
+    ctx.log(`[generate] refine context: ${state.refineContext.substring(0, 200)}`);
+  }
 
   // Always bump the attempt counter — even on error — so shouldRetry can terminate.
   const nextAttempt = state.attempts + 1;
@@ -289,33 +339,45 @@ async function generateNode(
   }
 
   let code = '';
+  // Working copy of the error history — callWithRetryAwareness mutates it
+  // (Bible pattern); returned in the state update below.
+  const errorHistory = [...state.errorHistory];
   try {
-    code = await callUnifiedLLM(
-      ANIMATION_SYSTEM_PROMPT,
-      userPrompt,
-      state.modelId,
-      state.apiKey,
-      undefined,
-      0.3,
-      (line) => ctx.emit({ type: 'log', ts: Date.now(), line: `[generate] ${line}` }),
-      (chunk) => ctx.emit({ type: 'chunk', ts: Date.now(), text: chunk }),
-      state.sessionId,
+    code = await callWithRetryAwareness(
+      () =>
+        callUnifiedLLM(
+          systemPrompt,
+          userPrompt,
+          state.modelId,
+          state.apiKey,
+          undefined,
+          temperature,
+          (line) => ctx.emit({ type: 'log', ts: Date.now(), line: `[generate] ${line}` }),
+          (chunk) => ctx.emit({ type: 'chunk', ts: Date.now(), text: chunk }),
+          state.sessionId,
+        ),
+      errorHistory,
+      nextAttempt,
+      'Generate',
+      isRetry ? 'refine' : 'generate',
+      (line) => ctx.log(line),
     );
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     ctx.log(`[generate] LLM call failed: ${msg.slice(0, 200)}`);
     ctx.emit({ type: 'stage-end', ts: Date.now(), stage: 'generate', ok: false, error: msg });
     // Increment attempts even on error so shouldRetry terminates after maxAttempts.
-    return { error: msg, attempts: nextAttempt, rawCode: state.rawCode, rawTreeJson: state.rawTreeJson };
+    return { error: msg, attempts: nextAttempt, rawCode: state.rawCode, rawTreeJson: state.rawTreeJson, errorHistory };
   }
 
-  ctx.log(`[generate] received ${code.length} chars`);
+  ctx.log(`[generate] received ${code.length} chars (temperature=${temperature})`);
   ctx.emit({ type: 'stage-end', ts: Date.now(), stage: 'generate', ok: true });
 
   return {
     rawCode: code,
     rawTreeJson: code, // mirror; parseGsapNode re-extracts both pieces
     attempts: nextAttempt,
+    errorHistory,
     messages: [
       { role: 'user', content: userPrompt },
       { role: 'assistant', content: code },
@@ -347,19 +409,38 @@ async function parseGsapNode(
   ctx.log(`[parse] normalized code: ${normalized.length} chars`);
 
   // Best-effort tree parse here. Hard assertions run in validateNode so the
-  // retry node can read the issues list.
+  // retry node can read the issues list. Parsing uses the Bible's robust
+  // chain: JSON.parse → parseLLMJson (fences/balanced-bracket) →
+  // recoverTruncatedJSON (closes open brackets / salvage fields).
   let containerTree: ElementorWidgetValidated | null = null;
   if (extracted.treeJsonText) {
     try {
-      const parsed = JSON.parse(extracted.treeJsonText);
-      const candidate =
-        parsed && typeof parsed === 'object' && 'containerTree' in parsed
-          ? (parsed as { containerTree: unknown }).containerTree
-          : parsed;
-      // Lazy import to avoid a circular dependency in tests.
-      const { validateTree } = await import('./elementor-schema');
-      const v = validateTree(candidate);
-      if (v.ok) containerTree = v.tree;
+      let candidate: unknown = null;
+      let parseStrategy = 'direct';
+      try {
+        candidate = JSON.parse(extracted.treeJsonText);
+      } catch {
+        try {
+          candidate = parseLLMJson<unknown>(extracted.treeJsonText);
+          parseStrategy = 'parseLLMJson';
+        } catch {
+          const recovered = recoverTruncatedJSON<Record<string, unknown>>(extracted.treeJsonText);
+          if (recovered) {
+            candidate = recovered;
+            parseStrategy = 'recoverTruncatedJSON';
+          }
+        }
+      }
+      if (candidate && typeof candidate === 'object') {
+        const root = 'containerTree' in (candidate as object)
+          ? (candidate as { containerTree: unknown }).containerTree
+          : candidate;
+        ctx.log(`[parse] tree JSON parsed via ${parseStrategy}`);
+        // Lazy import to avoid a circular dependency in tests.
+        const { validateTree } = await import('./elementor-schema');
+        const v = validateTree(root);
+        if (v.ok) containerTree = v.tree;
+      }
     } catch {
       // Swallow — validateNode will produce a clear issue.
     }
@@ -415,11 +496,71 @@ async function validateNode(
 
   const allIssues = [...result.issues, ...signatureIssues, ...cross.issues];
   const deduction = Math.min(100, allIssues.length * 12);
-  const qualityScore = Math.max(0, 100 - deduction);
-  const isValid = qualityScore >= 80 && signatureIssues.length === 0 && cross.isValid;
+  const staticScore = Math.max(0, 100 - deduction) / 100; // 0.0-1.0
+
+  // ── AX validate stage: LLM rubric (Bible VALIDATE, threshold 0.75) ──────
+  // Ported word-to-word from atomic-graph-opencode: quality-aware
+  // self-critique on a 0.0-1.0 scale, temperature 0.1, small JSON response
+  // parsed with parseLLMJson + clamped like the Bible's validate step.
+  let llmScore = 1; // Neutral when the LLM rubric cannot run — static checks own the verdict
+  let llmIssues: string[] = [];
+  const errorHistory = [...state.errorHistory];
+  const canRunLlmValidate =
+    !!state.gsapCode && state.gsapCode.includes('gsap.') && !state.error;
+
+  if (canRunLlmValidate) {
+    ctx.log(`[validate] AX rubric — temperature=${getStageTemperature('validate')}, max_tokens=1024, threshold=${VALIDATION_THRESHOLD}`);
+    try {
+      const raw = await callWithRetryAwareness(
+        () =>
+          callUnifiedLLM(
+            AX_VALIDATE_SYSTEM_PROMPT,
+            buildValidateUserPrompt({
+              intent: state.intent,
+              code: state.gsapCode,
+              treeJson: state.rawTreeJson,
+            }),
+            state.modelId,
+            state.apiKey,
+            1024, // Bible: validation returns small JSON — fixed 1024 is enough
+            getStageTemperature('validate'),
+            (line) => ctx.emit({ type: 'log', ts: Date.now(), line: `[validate] ${line}` }),
+          ),
+        errorHistory,
+        state.attempts,
+        'Validate',
+        'validate',
+        (line) => ctx.log(line),
+      );
+
+      const parsed = parseLLMJson<Partial<AxValidationResult>>(raw);
+      llmScore =
+        typeof parsed.score === 'number'
+          ? Math.min(1, Math.max(0, parsed.score))
+          : 0.7; // Bible default fallback score
+      llmIssues = Array.isArray(parsed.issues) ? parsed.issues : [];
+      ctx.log(`[validate] AX rubric score=${llmScore} (${llmIssues.length} issue(s))`);
+      llmIssues.forEach((issue) => ctx.log(`[validate]   - ${issue}`));
+    } catch (validateLlmError) {
+      // Bible pattern: validate failure degrades gracefully to the default
+      // fallback score instead of failing the pipeline.
+      const msg = validateLlmError instanceof Error ? validateLlmError.message : String(validateLlmError);
+      console.warn('[AX Pipeline] Validate failed, using default score:', msg.slice(0, 150));
+      ctx.log(`[validate] AX rubric failed — using default score 0.7 (${msg.slice(0, 120)})`);
+      llmScore = 0.7; // Bible default fallback score
+    }
+  } else {
+    ctx.log('[validate] AX rubric skipped (no usable code or LLM failure placeholder)');
+  }
+
+  // Final score: LLM rubric capped by the static-assertion score, exactly
+  // like hard assertions gate the rubric in the Bible's validate step.
+  const finalScore = allIssues.length > 0 ? Math.min(llmScore, staticScore) : llmScore;
+  const qualityScore = Math.round(finalScore * 100); // Boundary: Bible 0.0-1.0 → this repo's 0-100
+  const isValid = finalScore >= VALIDATION_THRESHOLD && signatureIssues.length === 0 && cross.isValid;
 
   ctx.log(
-    `[validate] code=${result.qualityScore} sig=${signatureIssues.length} cross=${cross.issues.length}`,
+    `[validate] code=${result.qualityScore} sig=${signatureIssues.length} cross=${cross.issues.length} → ${isValid ? 'PASS' : 'FAIL'} (score=${qualityScore}, threshold=${VALIDATION_THRESHOLD * 100})`,
   );
   if (allIssues.length > 0) {
     allIssues.forEach((issue) => ctx.log(`[validate]   - ${issue}`));
@@ -432,9 +573,12 @@ async function validateNode(
   });
   return {
     isValid,
-    validationIssues: allIssues,
+    llmScore,
+    qualityScore,
+    validationIssues: [...allIssues, ...llmIssues],
+    errorHistory,
     stageTrace: [
-      `validate → ${isValid ? 'pass' : 'fail'} (score=${qualityScore}, sig=${signatureIssues.length}, cross=${cross.issues.length})`,
+      `validate → ${isValid ? 'pass' : 'fail'} (score=${qualityScore}, llm=${llmScore}, sig=${signatureIssues.length}, cross=${cross.issues.length})`,
     ],
   };
 }
@@ -453,8 +597,14 @@ async function retryGuardNode(
     description: `Cooldown + corrective feedback for next attempt`,
   });
   ctx.log(
-    `[retry] quality below threshold — preparing corrective context (attempt ${state.attempts}/${state.maxAttempts})`,
+    `[retry] quality below threshold (${VALIDATION_THRESHOLD}) — preparing corrective context (attempt ${state.attempts}/${state.maxAttempts})`,
   );
+
+  // AX DSPy: compile surgical fix context from the full error history
+  // (Bible compileRefinePrompt — word-to-word). Consumed by generateNode on
+  // the retry attempt and appended to the user prompt.
+  const refineContext = compileRefinePrompt(state.validationIssues, state.errorHistory, 'refine');
+  ctx.log(`[retry] compiled refinement context: ${refineContext.substring(0, 200)}`);
 
   // Apply adaptive cooldown before the next LLM call (NVIDIA rate-limit)
   const config = getModelConfig(state.modelId);
@@ -462,6 +612,7 @@ async function retryGuardNode(
 
   ctx.emit({ type: 'stage-end', ts: Date.now(), stage: 'retry', ok: true });
   return {
+    refineContext,
     stageTrace: [
       `retry → armed with ${state.validationIssues.length} issue(s) to address`,
     ],
@@ -482,12 +633,9 @@ async function outputNode(
     description: 'Packaging validated code + tree into GenerateResponse',
   });
 
-  // Zero-shot mode: we no longer run validateNode, so don't compute a
-  // quality score here either. The validation object is still attached
-  // to satisfy the GenerateResponse schema (and the preview pane's
-  // existing layout), but isValid=false and qualityScore=0 are
-  // intentionally neutral — they don't represent a judgment of the
-  // model's output, just "we didn't grade it."
+  // AX DSPy quality gate: validation is now REAL — the LLM rubric score
+  // (capped by static assertions) from validateNode, on the Bible's 0.75
+  // threshold. The validation object keeps the GenerateResponse schema.
   const container: ElementorContainer = state.container
     ? { ...state.container }
     : {
@@ -515,9 +663,9 @@ async function outputNode(
     cssSelectors: state.widgetProfile!.selectors,
     scalabilityStrategy: deriveScalabilityStrategy(state.intent, state.containerTree),
     validation: {
-      isValid: false,
-      qualityScore: 0,
-      issues: [],
+      isValid: state.isValid,
+      qualityScore: state.qualityScore,
+      issues: state.validationIssues,
     },
     attempts: state.attempts,
     model: `${config.id} (${config.model})`,
@@ -572,20 +720,26 @@ function shouldRetry(state: PipelineState): 'retry' | 'output' {
 // ─── Build the graph ──────────────────────────────────────────────────────────
 
 function buildGraph() {
-  // Zero-shot pipeline: GPT produces whatever it produces, we ship it.
-  // No quality gate, no retry. The validate/retry NODES are intentionally
-  // NOT registered (LangGraph throws if a registered node has no incoming
-  // edges), but the validateNode/retryGuardNode FUNCTIONS are kept
-  // below for type-compatibility with anything that imports them.
+  // AX DSPy quality-gated pipeline (ported from atomic-graph-opencode):
+  // generate → parse → validate → (threshold 0.75 passes ? output : retry →
+  // generate with compiled refinement feedback). The loop is bounded by
+  // maxAttempts (adaptive per provider — see runGenerationPipelineStream).
   const workflow = new StateGraph(PipelineAnnotation)
     .addNode('entry', (s: PipelineState) => entryNode(s, makeNodeHelpers(_globalEmit)))
     .addNode('generate', (s: PipelineState) => generateNode(s, makeNodeHelpers(_globalEmit)))
     .addNode('parse', (s: PipelineState) => parseGsapNode(s, makeNodeHelpers(_globalEmit)))
+    .addNode('validate', (s: PipelineState) => validateNode(s, makeNodeHelpers(_globalEmit)))
+    .addNode('retry', (s: PipelineState) => retryGuardNode(s, makeNodeHelpers(_globalEmit)))
     .addNode('output', (s: PipelineState) => outputNode(s, makeNodeHelpers(_globalEmit)));
 
   workflow.addEdge('entry', 'generate');
   workflow.addEdge('generate', 'parse');
-  workflow.addEdge('parse', 'output');
+  workflow.addEdge('parse', 'validate');
+  workflow.addConditionalEdges('validate', shouldRetry, {
+    retry: 'retry',
+    output: 'output',
+  });
+  workflow.addEdge('retry', 'generate');
   workflow.addEdge('output', END);
   workflow.setEntryPoint('entry');
 
@@ -602,21 +756,25 @@ export async function runGenerationPipelineStream(opts: RunOptions): Promise<Gen
   _globalEmit = opts.emit;
   const graph = buildGraph();
 
-  // Adaptive maxAttempts — protect against Vercel Hobby's 60s cap:
+  // Adaptive maxAttempts — protect against Vercel Hobby's caps while still
+  // running the AX validate→refine loop (Bible MAX_ITERATIONS=3):
   //   - NVIDIA gpt-oss-20b has a 50s per-call timeout on Vercel Hobby
   //     (set in lib/models.ts to fit Vercel's 60s cap). Even one attempt
   //     can hit 50s, so a retry would push wall time to 100s+ → Vercel
-  //     kills us. Force maxAttempts=1 so the pipeline emits a clean
-  //     pipeline-end with the timeout error rather than getting
-  //     hard-killed on the second attempt.
+  //     kills us. Force maxAttempts=1 so the pipeline validates (cheap,
+  //     1024-token rubric call) but skips the retry edge, emitting a clean
+  //     pipeline-end instead of getting hard-killed on the second attempt.
   //   - OpenCode GLM 5.3 is fast (typical 5-15s) and its 50s timeout is
-  //     only a safety ceiling, so retries always fit → maxAttempts=3.
+  //     only a safety ceiling, so the full AX loop always fits →
+  //     maxAttempts=3 (Bible MAX_ITERATIONS).
   //   - On local dev or Vercel Pro/Enterprise (bumped timeoutMs to 180s),
-  //     NVIDIA gets maxAttempts=3 to enable the full retry path.
+  //     NVIDIA gets maxAttempts=3 to enable the full AX retry path.
   const modelCfg = getModelConfig(opts.modelId);
   const isNvidiaOnVercelHobby =
     opts.modelId === 'nvidia-gpt-oss-20b' && modelCfg.timeoutMs <= 60_000;
-  const maxAttempts = isNvidiaOnVercelHobby ? 1 : 3;
+  // Bible MAX_ITERATIONS=3 — full AX loop on fast providers, degraded to a
+  // single attempt (validate-only) when wall-clock budget forbids retries.
+  const maxAttempts = isNvidiaOnVercelHobby ? 1 : MAX_ITERATIONS;
 
   const initial: PipelineState = {
     intent: opts.intent,
@@ -630,6 +788,10 @@ export async function runGenerationPipelineStream(opts: RunOptions): Promise<Gen
     containerTree: null,
     validationIssues: [],
     isValid: false,
+    llmScore: 0,
+    qualityScore: 0,
+    errorHistory: [],
+    refineContext: '',
     attempts: 0,
     maxAttempts,
     // Stable per-run session ID. OpenCode uses it for prompt-cache routing;

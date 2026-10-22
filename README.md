@@ -9,6 +9,36 @@
 ![Next.js 16](https://img.shields.io/badge/Next.js-16-black)
 ![LangGraph](https://img.shields.io/badge/LangGraph-1.4-purple)
 
+## AX DSPy Quality Gate
+
+The generation pipeline is now quality-gated word-to-word after the [atomic-graph-opencode](https://github.com/zazikant/atomic-graph-opencode) AX DSPy reference implementation, while serving this repo's output contract (`GenerateResponse` with `gsapCode` + `containerTree`):
+
+```
+repeat up to 3 iterations (MAX_ITERATIONS, adaptive per provider):
+  1. GENERATE → code + tree   (temperature 0.3; refine retries at 0.2 with AX_REFINE_SYSTEM_PROMPT)
+  2. PARSE    → normalized code + tree JSON (parseLLMJson + truncation recovery)
+  3. VALIDATE → score 0.0-1.0 (static assertions + AX LLM rubric, temperature 0.1)
+  if score >= 0.75 (VALIDATION_THRESHOLD):
+    break
+  else:
+  4. RETRY GUARD → DSPy-compiled refinement context (compileRefinePrompt) + cooldown
+    go back to step 1
+```
+
+Ported patterns (src/lib/ax-quality.ts):
+
+- **AX_VALIDATE_SYSTEM_PROMPT** — the Bible's VALIDATE rubric (weighted axes, exact JSON format, scoring bands, "Be FAIR") adapted to GSAP code + tree
+- **AX_REFINE_SYSTEM_PROMPT** — the Bible's REFINE prompt as the retry system prompt: fix the previous attempt's issues while preserving what already works
+- **compileRefinePrompt()** — DSPy-style Module.compile(): surgical fix context compiled from the full error history, word-to-word
+- **ErrorEntry tracking** — every failed LLM call is recorded (attempt, stage, error) via callWithRetryAwareness and fed into the compiled refinement prompt
+- **parseLLMJson + recoverTruncatedJSON** — robust JSON parsing chain for the validate response and the tree JSON extraction
+- **Stage-specific temperatures** — generate=0.3, validate=0.1, refine=0.2
+- **Validation threshold 0.75** — LLM rubric score capped by static-assertion score; qualityScore = score × 100 at the GenerateResponse boundary
+- **Adaptive loop budget** — NVIDIA on Vercel Hobby degrades to 1 attempt (validate-only); GLM 5.3 / local / Pro gets the full 3-iteration AX loop
+- Echo detection (isEcho) intentionally not ported — code generation cannot echo its natural-language intent; degenerate outputs are caught by the static `gsap.` check
+
+The validate/retry nodes in the LangGraph StateGraph are now REGISTERED and REACHED (previously zero-shot: entry → generate → parse → output).
+
 ## What it does
 
 1. **Intent** — User describes the animation (e.g. "Animated testimonial carousel with fade-in quotes and slide-in author names")
