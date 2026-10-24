@@ -39,6 +39,7 @@ import {
   extractCodeAndTree,
   AnimationSignatureError,
   ANIMATION_SYSTEM_PROMPT,
+  ANIMATION_RETRY_SYSTEM_PROMPT,
   type AnimationPrediction,
 } from './dspy-signature';
 import {
@@ -304,8 +305,10 @@ async function generateNode(
   });
 
   // Single-pass generation — no refine/retry stage (validate machinery
-  // removed, as in ax-translator).
-  const systemPrompt = ANIMATION_SYSTEM_PROMPT;
+  // removed, as in ax-translator). A re-invocation that carries a previous
+  // attempt uses the ax-translator retry meta prompt (isRetry pattern).
+  const isRetry = Boolean(state.rawCode);
+  const systemPrompt = isRetry ? ANIMATION_RETRY_SYSTEM_PROMPT : ANIMATION_SYSTEM_PROMPT;
   const temperature = getStageTemperature('generate');
 
   // Always bump the attempt counter — even on error — for the attempt log.

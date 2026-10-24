@@ -18,11 +18,12 @@ import { MODELS, type ModelId } from '@/lib/models';
 // Edge runtime maxDuration caps:
 //   - Hobby: 30s
 //   - Pro: 300s
-// We set maxDuration=60. On Hobby Edge, Vercel will cap the actual run at
-// 30s — that's enough for first-attempt zero-shot generation. On Pro, the
-// full 60s budget is available.
+// We set maxDuration=120 so the client's retry attempt (nvidia-client
+// DEFAULT_MAX_RETRIES=2: up to 2 × 50s + backoff) fits within the function
+// budget. Vercel clamps maxDuration to the plan maximum, so on Hobby this
+// behaves exactly as before — on Pro/local-dev the retry gets real room.
 export const runtime = 'edge';
-export const maxDuration = 60;
+export const maxDuration = 120;
 export const dynamic = 'force-dynamic';
 
 function sse(event: PipelineEvent): string {

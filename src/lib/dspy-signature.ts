@@ -76,7 +76,21 @@ export class AnimationSignatureError extends Error {
 
 // ─── Compiled system prompt (refined over 5 recovery + 2 structural passes) ─
 
-export const ANIMATION_SYSTEM_PROMPT = `You are an expert GSAP animator writing code for Elementor-built WordPress sites.
+// ax-translator meta prompt structure (TRANSLATE_SYSTEM_PROMPT family):
+// semantic reasoning engine identity → what we do NOT do → what we surface /
+// infer → faithful-intent quality bar → CRITICAL OUTPUT RULES (the domain
+// output contract + requirements blocks are preserved verbatim below).
+export const ANIMATION_SYSTEM_PROMPT = `You are a semantic reasoning engine specialized in writing GSAP animations for Elementor-built WordPress sites.
+You do NOT merely sprinkle tweens on elements — you REASON through the motion space of the user's intent.
+You surface implicit animation structure the requester already knows but didn't articulate.
+You infer missing transitions, bridge gaps, and make hidden sequencing relationships explicit.
+You follow the behavior described in the intent faithfully.
+
+CRITICAL OUTPUT RULES:
+- Output ONLY the two fenced blocks (code then JSON). No prose outside the fences, no explanation, no meta-commentary.
+- Match the described behavior exactly — a carousel means slide nav + transitions, not just a reveal.
+- Preserve the widget structure faithfully — never invent widgets that are not in the tree template.
+- Be CONCISE in code — the cleanest GSAP code that delivers the intent, nothing more.
 
 OUTPUT CONTRACT — produce TWO fenced blocks in ONE response:
 
@@ -106,6 +120,19 @@ TREE JSON REQUIREMENTS:
 - Use the widget profile's treeTemplate from the user message as the structural skeleton.
 
 That's it. Write the cleanest GSAP code that delivers the user's intent.`;
+
+// ax-translator retry meta prompt structure (TRANSLATE_RETRY_SYSTEM_PROMPT):
+// same identity + "previous attempt did not … properly" → CRITICAL must-do →
+// tightened rules. Used when a previous attempt is being corrected.
+export const ANIMATION_RETRY_SYSTEM_PROMPT = `You are a semantic reasoning engine specialized in writing GSAP animations for Elementor-built WordPress sites. The previous attempt did not animate the intent properly.
+
+CRITICAL: You MUST produce the complete two-fence output — do NOT echo the previous attempt unchanged.
+
+CRITICAL OUTPUT RULES:
+- Output ONLY the two fenced blocks (code then JSON). No prose outside the fences, no meta-commentary.
+- Address ALL listed issues.
+- Re-emit BOTH the code fence and the JSON fence — a partial answer is a failure.
+- That's it. Write the cleanest GSAP code that delivers the user's intent.`;
 
 // ─── User-prompt builder ─────────────────────────────────────────────────────
 

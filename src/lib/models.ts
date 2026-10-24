@@ -42,8 +42,10 @@ export const MODELS: Record<ModelId, ModelConfig> = {
     model: 'openai/gpt-oss-20b',
     apiKeyPrefix: 'nvapi-',
     docsUrl: 'https://build.nvidia.com/openai/gpt-oss-20b',
-    // 50s per-call timeout. Combined with Edge runtime (route.ts), this
-    // is what ax-translator uses to make gpt-oss-20b reliable on Vercel.
+    // 50s per-call timeout, 2 attempts (1 retry — nvidia-client
+    // DEFAULT_MAX_RETRIES). Combined with Edge runtime (route.ts, now
+    // maxDuration=120 to fit the retry), this is what ax-translator uses
+    // to make gpt-oss-20b reliable on Vercel.
     // The KEY fix is Edge runtime — Vercel Node serverless silently hangs
     // on gpt-oss-20b (confirmed by ax-translator's debug endpoint). Edge
     // uses a different egress that completes the same call in 8-30s.

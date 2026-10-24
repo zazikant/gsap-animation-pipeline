@@ -17,12 +17,15 @@ const NVIDIA_BASE_URL = 'https://integrate.api.nvidia.com/v1';
 export const DEFAULT_MODEL = 'openai/gpt-oss-20b';
 
 export const DEFAULT_CALL_TIMEOUT_MS = 180_000;
-// Single attempt per nvidiaChatCompletion call. There is no pipeline-level
-// retry stage (validate/retry machinery removed, as in ax-translator) — an
-// immediate same-prompt retry is pointless anyway, particularly on
-// timeouts, where retrying the same oversized prompt is doomed to time out
-// again and burns the entire Vercel maxDuration budget.
-export const DEFAULT_MAX_RETRIES = 1;
+// 2 attempts (1 retry with 500ms backoff) — ax-translator's retry policy
+// (isRetryableError gates it: 429/5xx/network resets/timeouts retry;
+// non-retryable 4xx surfaces immediately). The previous single-attempt
+// setting turned every slow TTFB into a hard failure — users saw
+// "NVIDIA call failed after 1 attempts: LLM timed out after 50s" with no
+// second chance even though gpt-oss-20b TTFB is highly variable.
+// There is still no pipeline-level validate/refine retry stage (removed,
+// as in ax-translator) — this is transport-level retry only.
+export const DEFAULT_MAX_RETRIES = 2;
 
 export interface NvidiaChatMessage {
   role: 'system' | 'user' | 'assistant';
