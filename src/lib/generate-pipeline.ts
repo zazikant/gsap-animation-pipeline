@@ -73,21 +73,16 @@ export type { PipelineEvent } from './pipeline-graph';
 // Re-export the Elementor widget type for component code that wants the shape.
 export type { ElementorWidget, ElementorWidgetValidated } from './elementor-widget';
 
-// AX DSPy quality-gated pipeline — every stage the graph traverses.
-// validate/retry nodes are ACTIVE (ported from atomic-graph-opencode):
-// validateNode runs the static assertions + the AX LLM rubric (threshold
-// 0.75); on failure retryGuardNode compiles DSPy refinement context and the
-// graph loops back to generateNode (up to MAX_ITERATIONS attempts).
-const STAGE_ORDER = ['entry', 'generate', 'parse', 'validate', 'retry', 'output'] as const;
+// Single direct pass — every stage the graph traverses (validate/retry
+// stages removed, as in ax-translator).
+const STAGE_ORDER = ['entry', 'generate', 'parse', 'output'] as const;
 type StageId = (typeof STAGE_ORDER)[number];
 
 const STAGE_META: Record<StageId, { name: string; description: string }> = {
   entry: { name: 'Entry Node', description: 'Parsing intent & container map' },
-  generate: { name: 'Generate', description: 'Calling LLM with intent (temp 0.3; refine retries at 0.2)' },
+  generate: { name: 'Generate', description: 'Single LLM call with intent (temp 0.3)' },
   parse: { name: 'Parse', description: 'Normalizing GSAP output + tree JSON' },
-  validate: { name: 'Validate', description: 'Static assertions + AX LLM rubric (threshold 0.75)' },
-  retry: { name: 'Retry Guard', description: 'DSPy-compiled refinement feedback + cooldown' },
-  output: { name: 'Output', description: 'Packaging code + tree for preview' },
+  output: { name: 'Output', description: 'Static checks + packaging code + tree for preview' },
 };
 
 export { STAGE_ORDER, STAGE_META };

@@ -46,7 +46,7 @@ export interface AnimationSignatureInput {
   previousCode?: string;
   /** Previous tree JSON (string) from a failed attempt — included when retrying. */
   previousTreeJson?: string;
-  /** Issues from the previous validateNode — included when retrying. */
+  /** Legacy retry input — the pipeline no longer retries; kept for compatibility. */
   validationIssues?: string[];
 }
 
