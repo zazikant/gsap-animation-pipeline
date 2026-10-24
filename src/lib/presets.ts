@@ -78,7 +78,7 @@ export const PIPELINE_STEPS: PipelineStep[] = [
   {
     id: 'generate',
     label: 'AI maps w0',
-    description: 'Auto-derives container structure & selectors',
+    description: 'AI maps the intent onto a container structure + selectors (LLM call)',
   },
   {
     id: 'preview',

@@ -29,6 +29,15 @@ import {
   selectWidgetProfile,
   type WidgetProfile,
 } from './widget-profiles';
+import {
+  MAPPING_MAX_TOKENS,
+  MAPPING_TEMPERATURE,
+  MAPPING_SYSTEM_PROMPT,
+  MAPPING_RETRY_SYSTEM_PROMPT,
+  buildMappingUserPrompt,
+  parseMappingResponse,
+  type IntentMappingResult,
+} from './intent-mapping';
 import { stripCodeFences, normalizeGsapCode, validateGsapCode, validateCodeAgainstTree } from './gsap-utils';
 import { newOpencodeSessionId } from './opencode-client';
 import type { GenerateResponse, ElementorContainer } from './generate-pipeline';
@@ -96,6 +105,8 @@ export interface PipelineState {
   stageTrace: string[];
   /** Final container metadata (filled by entryNode + outputNode) */
   container: ElementorContainer | null;
+  /** One-line strategy from the AI mapping; falls back to deriveScalabilityStrategy */
+  strategyOverride: string;
   /** Final result (filled by outputNode) */
   result: GenerateResponse | null;
   /** Error message if pipeline failed */
@@ -196,6 +207,10 @@ const PipelineAnnotation = Annotation.Root({
     reducer: (_x, y) => y,
     default: () => null,
   }),
+  strategyOverride: Annotation<string>({
+    reducer: (_x, y) => y,
+    default: () => '',
+  }),
   result: Annotation<GenerateResponse | null>({
     reducer: (_x, y) => y,
     default: () => null,
@@ -253,7 +268,7 @@ async function runCooldown(
   ctx.log(`[pipeline] cooldown complete`);
 }
 
-// ─── Node 1: entryNode ────────────────────────────────────────────────────────
+// ─── Node 1: entryNode — AI intent mapping ("AI maps w0") ────────────────────
 
 async function entryNode(
   state: PipelineState,
@@ -263,23 +278,94 @@ async function entryNode(
     type: 'stage-start',
     ts: Date.now(),
     stage: 'entry',
-    name: 'Entry Node',
-    description: 'Parsing intent & container map',
+    name: 'Intent Mapping',
+    description: 'AI maps intent → container structure & selectors',
   });
-  const profile = selectWidgetProfile(state.intent);
+
+  // Real LLM mapping. Previously this stage was a static keyword matcher
+  // (selectWidgetProfile): ANY intent containing "image" routed to the canned
+  // gallery profile, so every run showed the same w33 / lg-4 / "Three-column
+  // image gallery" notes regardless of the described layout. The LLM now maps
+  // the ACTUAL structure; the keyword matcher survives only as the
+  // deterministic fallback when the mapping call or its parse fails.
+  const errorHistory = [...state.errorHistory];
+
+  const callMapping = (isRetry: boolean): Promise<string> =>
+    callUnifiedLLM(
+      isRetry ? MAPPING_RETRY_SYSTEM_PROMPT : MAPPING_SYSTEM_PROMPT,
+      buildMappingUserPrompt(state.intent),
+      state.modelId,
+      state.apiKey,
+      MAPPING_MAX_TOKENS,
+      MAPPING_TEMPERATURE,
+      (line) => ctx.emit({ type: 'log', ts: Date.now(), line: `[entry] ${line}` }),
+      undefined,
+      state.sessionId,
+    );
+
+  let mapped: IntentMappingResult | null = null;
+  try {
+    const raw = await callWithRetryAwareness(
+      () => callMapping(false),
+      errorHistory,
+      1,
+      'Intent mapping',
+      'generate',
+      (line) => ctx.log(line),
+    );
+    ctx.log(`[entry] mapping response: ${raw.length} chars`);
+    try {
+      mapped = parseMappingResponse(raw);
+    } catch (parseErr: unknown) {
+      // One structured retry with the ax-translator retry meta prompt
+      // (isRetry pattern) before falling back to keywords.
+      const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+      ctx.log(`[entry] mapping parse failed: ${msg.slice(0, 160)} — retrying`);
+      const rawRetry = await callWithRetryAwareness(
+        () => callMapping(true),
+        errorHistory,
+        1,
+        'Intent mapping retry',
+        'generate',
+        (line) => ctx.log(line),
+      );
+      mapped = parseMappingResponse(rawRetry);
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    ctx.log(`[entry] AI mapping unavailable (${msg.slice(0, 120)}) — keyword fallback`);
+  }
+
+  let profile: WidgetProfile;
+  if (mapped) {
+    profile = mapped.profile;
+    ctx.log(`[entry] AI-mapped widget=${profile.widgetType} width=${profile.width} @ ${profile.breakpoint}`);
+  } else {
+    profile = selectWidgetProfile(state.intent);
+    ctx.log(`[entry] fallback widget=${profile.widgetType} width=${profile.width} @ ${profile.breakpoint}`);
+  }
+
   const container: ElementorContainer = {
     selector: profile.selectors[0],
     width: profile.width,
     breakpoint: profile.breakpoint,
     notes: profile.notes,
   };
-  ctx.log(`[entry] widget=${profile.widgetType} width=${profile.width} @ ${profile.breakpoint}`);
   ctx.log(`[entry] selectors: ${profile.selectors.length} prepared`);
   ctx.log(
-    `[entry] tree template: root=${profile.treeTemplate.id} ${(profile.repeats ?? []).length} repeat group(s)`,
+    `[entry] tree template: root=${profile.treeTemplate.id ?? profile.treeTemplate.className ?? '(root)'} ${(profile.repeats ?? []).length} repeat group(s)`,
   );
   ctx.emit({ type: 'stage-end', ts: Date.now(), stage: 'entry', ok: true });
-  return { widgetProfile: profile, container, stageTrace: [`entry → widget=${profile.widgetType}`] };
+  // Return only the NEW error entries — the errorHistory annotation uses a
+  // concat reducer, so returning the full accumulated copy would duplicate
+  // the pre-existing entries.
+  return {
+    widgetProfile: profile,
+    container,
+    errorHistory: errorHistory.slice(state.errorHistory.length),
+    strategyOverride: mapped?.strategy ?? '',
+    stageTrace: [`entry → widget=${profile.widgetType}${mapped ? ' (AI-mapped)' : ' (fallback)'}`],
+  };
 }
 
 // ─── Node 2: generateNode ─────────────────────────────────────────────────────
@@ -349,7 +435,8 @@ async function generateNode(
     ctx.log(`[generate] LLM call failed: ${msg.slice(0, 200)}`);
     ctx.emit({ type: 'stage-end', ts: Date.now(), stage: 'generate', ok: false, error: msg });
     // Increment attempts even on error so the attempt count stays accurate.
-    return { error: msg, attempts: nextAttempt, rawCode: state.rawCode, rawTreeJson: state.rawTreeJson, errorHistory };
+    // Only the NEW error entries go back — errorHistory uses a concat reducer.
+    return { error: msg, attempts: nextAttempt, rawCode: state.rawCode, rawTreeJson: state.rawTreeJson, errorHistory: errorHistory.slice(state.errorHistory.length) };
   }
 
   ctx.log(`[generate] received ${code.length} chars (temperature=${temperature})`);
@@ -359,7 +446,8 @@ async function generateNode(
     rawCode: code,
     rawTreeJson: code, // mirror; parseGsapNode re-extracts both pieces
     attempts: nextAttempt,
-    errorHistory,
+    // Only the NEW error entries — errorHistory uses a concat reducer.
+    errorHistory: errorHistory.slice(state.errorHistory.length),
     messages: [
       { role: 'user', content: userPrompt },
       { role: 'assistant', content: code },
@@ -506,7 +594,8 @@ async function outputNode(
     gsapCode: state.gsapCode,
     containerStructure: container,
     cssSelectors: state.widgetProfile!.selectors,
-    scalabilityStrategy: deriveScalabilityStrategy(state.intent, state.containerTree),
+    scalabilityStrategy:
+      state.strategyOverride || deriveScalabilityStrategy(state.intent, state.containerTree),
     validation: {
       isValid,
       qualityScore,
@@ -612,6 +701,7 @@ export async function runGenerationPipelineStream(opts: RunOptions): Promise<Gen
     messages: [],
     stageTrace: [],
     container: null,
+    strategyOverride: '',
     result: null,
     error: null,
   };

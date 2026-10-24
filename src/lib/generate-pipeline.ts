@@ -79,7 +79,7 @@ const STAGE_ORDER = ['entry', 'generate', 'parse', 'output'] as const;
 type StageId = (typeof STAGE_ORDER)[number];
 
 const STAGE_META: Record<StageId, { name: string; description: string }> = {
-  entry: { name: 'Entry Node', description: 'Parsing intent & container map' },
+  entry: { name: 'Intent Mapping', description: 'AI maps intent → container structure & selectors' },
   generate: { name: 'Generate', description: 'Single LLM call with intent (temp 0.3)' },
   parse: { name: 'Parse', description: 'Normalizing GSAP output + tree JSON' },
   output: { name: 'Output', description: 'Static checks + packaging code + tree for preview' },
